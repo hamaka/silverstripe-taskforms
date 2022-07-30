@@ -1,0 +1,7 @@
+nl:
+  Hamaka\TaskForms\Controllers\GroupedTaskRunner:
+    CAT_PRIORITY_LABEL: 'Prioriteit'
+    CAT_STATS_AND_REPORTS_LABEL: 'Statistieken en rapportages'
+    CAT_MAINTENANCE_LABEL: 'Onderhoud'
+    CAT_TESTS_LABEL: 'Tests'
+    CAT_OTHER_LABEL: 'Overig'

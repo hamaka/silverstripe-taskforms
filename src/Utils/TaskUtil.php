@@ -11,12 +11,8 @@
     use function is_string;
     use function method_exists;
     use function print_r;
+    use function str_replace;
     use function time;
-
-    /**
-     * @todo TaskRunner
-     * @todo is er JS toe te voegen die zodra je 1 veld aanpast het execute veld weghaalt? Dus dat je bij een wijziging geforceerd wordt om nog een dry run te starten.
-     */
 
     /**
      * Utility functions to make Silverstripe Tasks
@@ -296,6 +292,7 @@
             $aHTML[] = '<form action="" method="get" >';
 
             foreach ($aGetKeyToVarMap as $sGetKey => &$sVar) {
+                $sFieldLabel = str_replace('_', ' ', $sGetKey);
                 if ( ! is_string($sVar)) {
                     $sVar = '';
                 }
@@ -310,12 +307,12 @@
                             $aCustomComponents[$sGetKey]->setValue($sVar);
                         }
 
-                        $aHTML[] = '<span class=\'fieldlabel\'>' . $sGetKey . ':</span><br/>';
+                        $aHTML[] = '<span class=\'fieldlabel\'>' . $sFieldLabel . ':</span><br/>';
                         $aHTML[] = $aCustomComponents[$sGetKey]->forTemplate() . '<br/><br/>';
                     }
                 }
                 else {
-                    $aHTML[] = '<span class=\'fieldlabel\'>' . $sGetKey . ':</span><br/>';
+                    $aHTML[] = '<span class=\'fieldlabel\'>' . $sFieldLabel . ':</span><br/>';
                     $aHTML[] = '<input type="text" name="' . $sGetKey . '" value="' . $sVar . '" "><br/><br/>';
                 }
             }
@@ -375,7 +372,8 @@
 
         public static function addConfetti()
         {
-            echo '
+            if (Director::is_cli() !== true) {
+                echo '
   <script>var confetti = {
 	maxCount: 100,		//set max confetti count
 	speed: 2,			//set the particle animation speed
@@ -599,6 +597,7 @@
 })();
 
                 </script>';
+            }
         }
 
         public static function echoArrayAsTable($aData, $bShowHeaders = true, $sLayOut = 'horizontal')

@@ -11,6 +11,7 @@
     use SilverStripe\Dev\DebugView;
     use SilverStripe\Dev\TaskRunner;
     use SilverStripe\Dev\TestOnly;
+    use function _t;
     use function in_array;
     use function is_array;
     use function singleton;
@@ -120,45 +121,37 @@
              */
             $aRemovedCategories = (array)$oConfig->get('removed_categories');
 
-            /**
-             * YML:
-             * SilverStripe\Dev\TaskRunner:
-             *  category_names:
-             *      TASK_CAT_OTHER: 'Not specified'
-             */
-            $aCategoriesNames = (array)$oConfig->get('category_names');
-
             if ( ! in_array(static::TASK_CAT_PRIORITY, $aRemovedCategories)) {
                 $aAllCategories[static::TASK_CAT_PRIORITY] = [
-                    'name' => $aCategoriesNames[static::TASK_CAT_PRIORITY] ?? 'Top of the list',
+                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_PRIORITY_LABEL', "Priority"),
                     'sort' => 100,
                 ];
             }
 
             if ( ! in_array(static::TASK_CAT_STATS_AND_REPORTS, $aRemovedCategories)) {
                 $aAllCategories[static::TASK_CAT_STATS_AND_REPORTS] = [
-                    'name' => $aCategoriesNames[static::TASK_CAT_STATS_AND_REPORTS] ?? 'Statistics and Reports',
+                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_STATS_AND_REPORTS_LABEL', "Statistics and Reports"),
                     'sort' => 90,
                 ];
             }
 
             if ( ! in_array(static::TASK_CAT_MAINTENANCE, $aRemovedCategories)) {
                 $aAllCategories[static::TASK_CAT_MAINTENANCE] = [
-                    'name' => $aCategoriesNames[static::TASK_CAT_MAINTENANCE] ?? 'Maintenance',
+                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_MAINTENANCE_LABEL', "Maintenance"),
                     'sort' => 70,
                 ];
             }
 
             if ( ! in_array(static::TASK_CAT_TESTS, $aRemovedCategories)) {
                 $aAllCategories[static::TASK_CAT_TESTS] = [
-                    'name' => $aCategoriesNames[static::TASK_CAT_TESTS] ?? 'Tests',
+                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_TESTS_LABEL', "Tests"),
                     'sort' => 50,
                 ];
             }
 
             if ( ! in_array(static::TASK_CAT_OTHER, $aRemovedCategories)) {
                 $aAllCategories[static::TASK_CAT_OTHER] = [
-                    'name' => $aCategoriesNames[static::TASK_CAT_OTHER] ?? 'Misc',
+                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.A', "Misc"),
                     'sort' => 10,
                 ];
             }

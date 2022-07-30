@@ -25,7 +25,7 @@
         {
             // this adds CSS to the task
             TaskUtil::makePretty();
-
+            
             // echoNormal, echoGood, echoNotice, echoError and echoCommentOnPrev are shorthands
             // for styled messages like DB::alteration_message('Something is wrong', TaskUtil::ALT_MESSAGE_TYPE_ERROR);
             TaskUtil::echoNormal("Start task " . $this->title);
@@ -39,7 +39,7 @@
             // the & is important.
             $aGetKeyToVarMap = [
                 'MemberID'      => &$iMemberID,
-                'New FirstName' => &$sFirstName
+                'New_FirstName' => &$sFirstName
             ];
 
             // which fields are required to execute the task?
