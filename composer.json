@@ -1,0 +1,35 @@
+{
+    "name": "hamaka/silverstripe-taskforms",
+    "description": "Make decission making in task a bit easier by using forms",
+    "type": "silverstripe-vendormodule",
+    "homepage": "https://github.com/hamaka/silverstripe-taskforms",
+    "keywords": [
+        "silverstripe",
+        "CMS",
+        "task"
+    ],
+    "license": "BSD-3-Clause",
+    "require": {
+        "php": ">=7.1",
+        "silverstripe/cms": "^4"
+    },
+    "autoload": {
+        "psr-4": {
+            "hamaka\\silverstripe-taskforms\\": "src/"
+        }
+    },
+    "support": {
+        "issues": "https://github.com/hamaka/silverstripe-taskforms/issues"
+    },
+    "extra": {
+        "installer-name": "Silverstripe Taskforms",
+        "branch-alias": {
+            "dev-master": "2.x-dev"
+        },
+        "expose": [
+            "client/dist"
+        ]
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
