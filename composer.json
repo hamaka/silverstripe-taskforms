@@ -1,6 +1,6 @@
 {
     "name": "hamaka/silverstripe-taskforms",
-    "description": "Make decission making in task a bit easier by using forms",
+    "description": "Utility to make Silverstripe tasks more interactive and better looking.\n\n",
     "type": "silverstripe-vendormodule",
     "homepage": "https://github.com/hamaka/silverstripe-taskforms",
     "keywords": [
