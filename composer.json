@@ -5,8 +5,11 @@
     "homepage": "https://github.com/hamaka/silverstripe-taskforms",
     "keywords": [
         "silverstripe",
-        "CMS",
-        "task"
+        "buildtask",
+        "task",
+        "taskrunner",
+        "form",
+        "hamaka"
     ],
     "license": "BSD-3-Clause",
     "require": {
