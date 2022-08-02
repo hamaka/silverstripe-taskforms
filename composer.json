@@ -12,6 +12,23 @@
         "hamaka"
     ],
     "license": "BSD-3-Clause",
+    "authors": [
+        {
+            "name": "Sander van Scheepen",
+            "email": "sander@hamaka.nl",
+            "role": "Developer"
+        },
+        {
+            "name": "Carlo Riedstra",
+            "email": "carlo@hamaka.nl",
+            "role": "Developer"
+        },
+        {
+            "name": "Bauke Zwaan",
+            "email": "bauke@hamaka.nl",
+            "role": "Developer"
+        }
+    ],
     "require": {
         "php": ">=7.1",
         "silverstripe/cms": "^4"
