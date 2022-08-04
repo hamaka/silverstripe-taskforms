@@ -622,12 +622,19 @@
             $iRowNr = 1;
             foreach ($aTableData as $aRowData) {
 
+                $sRowClass = '';
+                if (isset($aRowData['css_class'])) {
+                    $sRowClass = $aRowData['css_class'];
+                }
+
                 // header
                 if ($iRowNr === 1 && $bShowHeaders === true) {
                     $aHTML[] = '<tr>';
 
                     foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                        $aHTML[] = '<th>' . $sFieldLabel . '</th>';
+                        if ( ! in_array($sFieldLabel, ['css_class'])) {
+                            $aHTML[] = '<th>' . $sFieldLabel . '</th>';
+                        }
                     }
 
                     $aHTML[] = '</tr>';
@@ -637,7 +644,9 @@
                 $aHTML[] = '<tr>';
 
                 foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                    $aHTML[] = '<td>' . $sFieldContent . '</td>';
+                    if ( ! in_array($sFieldLabel, ['css_class'])) {
+                        $aHTML[] = '<td>' . $sFieldContent . '</td>';
+                    }
                 }
 
                 $aHTML[] = '</tr>';
