@@ -11,6 +11,7 @@
     use function is_string;
     use function method_exists;
     use function print_r;
+    use function serialize;
     use function str_replace;
     use function time;
 
@@ -645,6 +646,10 @@
 
                 foreach ($aRowData as $sFieldLabel => $sFieldContent) {
                     if ( ! in_array($sFieldLabel, ['css_class'])) {
+                        if ( ! is_string($sFieldContent)) {
+                            $sFieldContent = serialize($sFieldContent);
+                        }
+
                         $aHTML[] = '<td>' . $sFieldContent . '</td>';
                     }
                 }
