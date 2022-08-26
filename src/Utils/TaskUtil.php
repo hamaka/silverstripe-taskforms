@@ -729,8 +729,8 @@
                     $aHTML[] = '</tr>';
                 }
 
-                $aHTML[] = '<tr>';
-                $aHTML[] = '  <td>&nbsp;</td>';
+                $aHTML[] = '<tr class="taskform-arraytable__separator-row">';
+                $aHTML[] = '  <td class="taskform-arraytable__separator-cell">&nbsp;</td>';
                 $aHTML[] = '</tr>';
 
                 ++$iRowNr;
