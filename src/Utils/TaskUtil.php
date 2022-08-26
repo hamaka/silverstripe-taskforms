@@ -4,14 +4,18 @@
 
     use SilverStripe\Control\Director;
     use SilverStripe\ORM\DB;
+    use function array_filter;
     use function array_keys;
+    use function count;
     use function implode;
     use function in_array;
     use function intval;
+    use function is_array;
     use function is_string;
     use function method_exists;
     use function print_r;
     use function serialize;
+    use function sizeof;
     use function str_replace;
     use function time;
 
@@ -632,10 +636,19 @@
                 if ($iRowNr === 1 && $bShowHeaders === true) {
                     $aHTML[] = '<tr>';
 
-                    foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                        if ( ! in_array($sFieldLabel, ['css_class'])) {
-                            $aHTML[] = '<th>' . $sFieldLabel . '</th>';
+                    if (is_array($aRowData)) {
+                        foreach ($aRowData as $sFieldLabel => $sFieldContent) {
+                            if ( ! in_array($sFieldLabel, ['css_class'])) {
+                                $aHTML[] = '<th>' . $sFieldLabel . '</th>';
+                            }
                         }
+                    }
+                    else {
+                        if ( ! is_string($aRowData)) {
+                            $aRowData = serialize($aRowData);
+                        }
+
+                        $aHTML[] = '<th>' . $aRowData . '</th>';
                     }
 
                     $aHTML[] = '</tr>';
@@ -644,14 +657,23 @@
                 // normale regel
                 $aHTML[] = '<tr>';
 
-                foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                    if ( ! in_array($sFieldLabel, ['css_class'])) {
-                        if ( ! is_string($sFieldContent)) {
-                            $sFieldContent = serialize($sFieldContent);
-                        }
+                if (is_array($aRowData)) {
+                    foreach ($aRowData as $sFieldLabel => $sFieldContent) {
+                        if ( ! in_array($sFieldLabel, ['css_class'])) {
+                            if ( ! is_string($sFieldContent)) {
+                                $sFieldContent = serialize($sFieldContent);
+                            }
 
-                        $aHTML[] = '<td>' . $sFieldContent . '</td>';
+                            $aHTML[] = '<td>' . $sFieldContent . '</td>';
+                        }
                     }
+                }
+                else {
+                    if ( ! is_string($aRowData)) {
+                        $aRowData = serialize($aRowData);
+                    }
+
+                    $aHTML[] = '<td>' . $aRowData . '</td>';
                 }
 
                 $aHTML[] = '</tr>';
@@ -672,16 +694,22 @@
             $iRowNr = 1;
             foreach ($aTableData as $aRowData) {
 
+                if (is_array($aRowData)) {
+                    foreach ($aRowData as $sFieldLabel => $sFieldContent) {
+                        if ($bShowHeaders) {
+                            $aHTML[] = '<tr>';
+                            $aHTML[] = '  <th style="text-align: left" ">' . $sFieldLabel . ':</th>';
+                            $aHTML[] = '</tr>';
+                        }
 
-                foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                    if ($bShowHeaders) {
                         $aHTML[] = '<tr>';
-                        $aHTML[] = '  <th style="text-align: left" ">' . $sFieldLabel . ':</th>';
+                        $aHTML[] = '  <td>' . $sFieldContent . '</td>';
                         $aHTML[] = '</tr>';
                     }
-
+                }
+                else {
                     $aHTML[] = '<tr>';
-                    $aHTML[] = '  <td>' . $sFieldContent . '</td>';
+                    $aHTML[] = '  <td>' . $aRowData . '</td>';
                     $aHTML[] = '</tr>';
                 }
 
