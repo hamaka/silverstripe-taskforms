@@ -2,6 +2,7 @@
 
     namespace Hamaka\TaskForms\Utils;
 
+    use Exception;
     use SilverStripe\Control\Director;
     use SilverStripe\ORM\DB;
     use function array_filter;
@@ -645,7 +646,12 @@
                     }
                     else {
                         if ( ! is_string($aRowData)) {
-                            $aRowData = serialize($aRowData);
+                            try {
+                                $aRowData = serialize($aRowData);
+                            }
+                            catch (Exception $e) {
+                                $aRowData = '';
+                            }
                         }
 
                         $aHTML[] = '<th>' . $aRowData . '</th>';
@@ -661,7 +667,12 @@
                     foreach ($aRowData as $sFieldLabel => $sFieldContent) {
                         if ( ! in_array($sFieldLabel, ['css_class'])) {
                             if ( ! is_string($sFieldContent)) {
-                                $sFieldContent = serialize($sFieldContent);
+                                try {
+                                    $sFieldContent = serialize($sFieldContent);
+                                }
+                                catch (Exception $e) {
+                                    $sFieldContent = '';
+                                }
                             }
 
                             $aHTML[] = '<td>' . $sFieldContent . '</td>';
@@ -670,7 +681,12 @@
                 }
                 else {
                     if ( ! is_string($aRowData)) {
-                        $aRowData = serialize($aRowData);
+                        try {
+                            $aRowData = serialize($aRowData);
+                        }
+                        catch (Exception $e) {
+                            $aRowData = '';
+                        }
                     }
 
                     $aHTML[] = '<td>' . $aRowData . '</td>';
