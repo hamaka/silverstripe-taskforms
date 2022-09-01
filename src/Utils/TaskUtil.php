@@ -132,6 +132,10 @@
                   text-align: left;
                 }
 
+                tr:nth-child(even) {
+                  background-color: #eee;
+                }
+
                 td, th {
                   padding: 10px;
                 }
@@ -629,7 +633,7 @@
             foreach ($aTableData as $aRowData) {
 
                 $sRowClass = '';
-                if (isset($aRowData['css_class'])) {
+                if (is_array($aRowData) && isset($aRowData['css_class'])) {
                     $sRowClass = $aRowData['css_class'];
                 }
 
