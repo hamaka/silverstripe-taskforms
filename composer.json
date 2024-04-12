@@ -31,11 +31,11 @@
     ],
     "require": {
         "php": ">=7.1",
-        "silverstripe/framework": "^4"
+        "silverstripe/framework": "^4 | ^5"
     },
     "autoload": {
         "psr-4": {
-            "hamaka\\silverstripe-taskforms\\": "src/"
+            "Hamaka\\Taskforms\\": "src/"
         }
     },
     "support": {
