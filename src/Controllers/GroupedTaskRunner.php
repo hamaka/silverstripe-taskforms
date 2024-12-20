@@ -83,7 +83,7 @@
 
                         foreach ($aTasksInCat as $aTaskConfig) {
 
-                            $sLinkImmediate = $base . "dev/tasks/" . $aTaskConfig['segment'];
+                            $sLinkImmediate = $base . "/dev/tasks/" . $aTaskConfig['segment'];
 
                             echo "<li><p>";
                             echo "<a href=\"{$sLinkImmediate}\">" . $aTaskConfig['title'] . "</a>";
