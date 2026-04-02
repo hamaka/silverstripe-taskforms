@@ -61,7 +61,7 @@
                 $renderer = new DebugView();
                 echo $renderer->renderHeader();
                 echo $renderer->renderInfo("Development Tools: Tasks", Director::absoluteBaseURL());
-                $base = Director::absoluteBaseURL();
+                $base = rtrim(Director::absoluteBaseURL(), '/')  . '/';
 
                 $aTaskCatOrder = $this->getCategories();
 
@@ -83,7 +83,7 @@
 
                         foreach ($aTasksInCat as $aTaskConfig) {
 
-                            $sLinkImmediate = $base . "/dev/tasks/" . $aTaskConfig['segment'];
+                            $sLinkImmediate = $base . "dev/tasks/" . $aTaskConfig['segment'];
 
                             echo "<li><p>";
                             echo "<a href=\"{$sLinkImmediate}\">" . $aTaskConfig['title'] . "</a>";
