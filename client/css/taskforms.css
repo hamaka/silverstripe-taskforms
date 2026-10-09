@@ -1,0 +1,528 @@
+/*
+ * Styles for task output, added by TaskUtil::makePretty().
+ *
+ * A task page is streamed: Silverstripe outputs an <h1>, then whatever the task outputs, then a completion line.
+ * There is no wrapper element, so the layout styles the elements in <body> directly: a centred column under a
+ * header band (the <h1>), messages as a log, the form as a card with a confirmation panel, and tables as cards.
+ */
+
+:root {
+  --tf-primary: #005a93;
+  --tf-primary-dark: #004470;
+  --tf-primary-tint: #e5f0f7;
+  --tf-text: #303b4d;
+  --tf-text-soft: #4f5861;
+  --tf-text-muted: #66727d;
+  --tf-border: #d9dee2;
+  --tf-border-strong: #ced5e1;
+  --tf-bg: #f6f7f8;
+  --tf-surface: #fff;
+  --tf-success: #2b6c2d;
+  --tf-success-tint: #e8f3e8;
+  --tf-warning: #8a5a00;
+  --tf-warning-tint: #fdf4e1;
+  --tf-warning-border: #f0c36d;
+  --tf-danger: #b42318;
+  --tf-danger-tint: #fdecea;
+  --tf-radius: 6px;
+  --tf-column: 920px;
+  --tf-gutter: max(16px, calc((100% - var(--tf-column)) / 2));
+}
+
+/* Page */
+html {
+  background: var(--tf-bg);
+}
+
+body {
+  position: relative;
+  margin: 0;
+  padding: 0 var(--tf-gutter) 48px;
+  color: var(--tf-text-soft);
+  background: var(--tf-bg);
+  font-size: 15px;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The task title from Silverstripe, shown as a full-width header band like on /dev/tasks */
+body > h1:first-of-type {
+  margin: 0 0 28px;
+  padding: 30px 0 24px;
+  background: var(--tf-primary);
+  box-shadow: 0 0 0 100vmax var(--tf-primary), 0 1px 0 100vmax var(--tf-primary-dark);
+  clip-path: inset(0 -100vmax -1px);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.taskforms-back {
+  position: absolute;
+  top: 8px;
+  left: var(--tf-gutter);
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.taskforms-back::before {
+  content: "\2190\00a0";
+}
+
+.taskforms-back:hover,
+.taskforms-back:focus {
+  color: #fff;
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--tf-text);
+  line-height: 1.3;
+}
+
+.taskforms-heading {
+  margin: 32px 0 12px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+h3.taskforms-heading,
+h4.taskforms-heading {
+  margin-top: 24px;
+  font-size: 16px;
+}
+
+a {
+  color: var(--tf-primary);
+}
+
+.taskforms-space {
+  height: 16px;
+}
+
+.taskforms-separator {
+  margin: 28px 0;
+  border: 0;
+  border-top: 1px solid var(--tf-border);
+}
+
+/* Messages (TaskUtil::echoNormal() etc. and DB::alteration_message()) as one log: consecutive messages share a card */
+body > li {
+  display: block;
+  position: relative;
+  margin: 0;
+  padding: 9px 14px 9px 36px;
+  border: 1px solid var(--tf-border);
+  border-top-width: 0;
+  background: var(--tf-surface);
+  color: var(--tf-text-soft);
+  list-style: none;
+}
+
+body > li::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  left: 16px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tf-border-strong);
+}
+
+body > :not(li) + li,
+body > li:first-child {
+  border-top-width: 1px;
+  border-top-left-radius: var(--tf-radius);
+  border-top-right-radius: var(--tf-radius);
+}
+
+body > li:not(:has(+ li)) {
+  border-bottom-left-radius: var(--tf-radius);
+  border-bottom-right-radius: var(--tf-radius);
+}
+
+/* echoGood() */
+body > li.info {
+  color: var(--tf-success);
+  font-weight: 600;
+}
+
+body > li.info::before {
+  background: var(--tf-success);
+}
+
+/* echoNotice() */
+body > li.warning {
+  background: var(--tf-warning-tint);
+  color: var(--tf-warning);
+  font-weight: 600;
+}
+
+body > li.warning::before {
+  background: #d99a1e;
+}
+
+/* echoError() */
+body > li.error {
+  background: var(--tf-danger-tint);
+  color: var(--tf-danger);
+  font-weight: 600;
+}
+
+body > li.error::before {
+  background: var(--tf-danger);
+}
+
+/* echoCommentOnPrev() */
+body > li.success {
+  padding-top: 0;
+  padding-left: 52px;
+  color: var(--tf-text-muted);
+  font-size: 14px;
+}
+
+body > li.success::before {
+  content: "\21B3";
+  top: -1px;
+  left: 34px;
+  width: auto;
+  height: auto;
+  background: none;
+  color: var(--tf-text-muted);
+}
+
+pre,
+pre code {
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--tf-border);
+  border-radius: 4px;
+  background: #f1f4f6;
+  color: var(--tf-text);
+  font-size: 13px;
+  font-weight: normal;
+}
+
+pre code {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+/* Form */
+.taskforms-form {
+  margin: 24px 0;
+  padding: 24px;
+  border: 1px solid var(--tf-border);
+  border-radius: var(--tf-radius);
+  background: var(--tf-surface);
+  box-shadow: 0 1px 2px rgba(48, 59, 77, 0.05);
+}
+
+.taskforms-form__fields {
+  display: grid;
+  gap: 18px;
+  max-width: 480px;
+}
+
+.taskforms-field__label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--tf-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.taskforms-field__required {
+  margin-left: 4px;
+  color: var(--tf-text-muted);
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.taskforms-form input:not([type]),
+.taskforms-form input[type="text"],
+.taskforms-form input[type="email"],
+.taskforms-form input[type="number"],
+.taskforms-form input[type="date"],
+.taskforms-form input[type="datetime-local"],
+.taskforms-form input[type="password"],
+.taskforms-form input[type="search"],
+.taskforms-form input[type="tel"],
+.taskforms-form input[type="url"],
+.taskforms-form select,
+.taskforms-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--tf-border-strong);
+  border-radius: var(--tf-radius);
+  background-color: var(--tf-surface);
+  color: var(--tf-text);
+  font: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.taskforms-form select {
+  appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2366727d' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+.taskforms-form input:focus,
+.taskforms-form select:focus,
+.taskforms-form textarea:focus {
+  border-color: var(--tf-primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 90, 147, 0.18);
+}
+
+.taskforms-form .taskforms-field--missing input,
+.taskforms-form .taskforms-field--missing select,
+.taskforms-form .taskforms-field--missing textarea {
+  border-color: var(--tf-danger);
+}
+
+.taskforms-field__message {
+  margin: 6px 0 0;
+  color: var(--tf-danger);
+  font-size: 13px;
+}
+
+/* Confirmation after a dry run */
+.taskforms-confirm {
+  box-sizing: border-box;
+  max-width: 480px;
+  margin-top: 22px;
+  padding: 14px 16px;
+  border: 1px solid var(--tf-warning-border);
+  border-radius: var(--tf-radius);
+  background: var(--tf-warning-tint);
+}
+
+.taskforms-confirm__label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--tf-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.taskforms-confirm__checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--tf-danger);
+  cursor: pointer;
+}
+
+.taskforms-confirm__hint {
+  margin: 6px 0 0 28px;
+  color: var(--tf-warning);
+  font-size: 13px;
+}
+
+.taskforms-form__actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+/* Buttons */
+.taskforms-button {
+  min-height: 40px;
+  padding: 8px 18px;
+  border: 1px solid var(--tf-border-strong);
+  border-radius: var(--tf-radius);
+  background: var(--tf-surface);
+  color: var(--tf-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.taskforms-button:hover {
+  background: var(--tf-bg);
+}
+
+.taskforms-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 90, 147, 0.25);
+}
+
+.taskforms-button--primary {
+  border-color: var(--tf-primary);
+  background: var(--tf-primary);
+  color: #fff;
+}
+
+.taskforms-button--primary:hover {
+  border-color: var(--tf-primary-dark);
+  background: var(--tf-primary-dark);
+}
+
+.taskforms-button--danger,
+.taskforms-button--danger:hover {
+  border-color: var(--tf-danger);
+  background: var(--tf-danger);
+}
+
+.taskforms-reset {
+  margin: 24px 0;
+}
+
+/* Tables (TaskUtil::echoArrayAsTable()) */
+.taskforms-table {
+  overflow-x: auto;
+  margin: 0 0 24px;
+  border: 1px solid var(--tf-border);
+  border-radius: var(--tf-radius);
+  background: var(--tf-surface);
+}
+
+.taskforms-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.taskforms-table th,
+.taskforms-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--tf-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.taskforms-table th {
+  background: #f1f4f6;
+  color: var(--tf-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.taskforms-table tr:last-child > td {
+  border-bottom: 0;
+}
+
+.taskforms-table tbody tr:hover > td {
+  background: #fafbfc;
+}
+
+/* Stacked layout: label above value, items separated */
+.taskforms-table--stacked th {
+  padding-bottom: 0;
+  border-bottom: 0;
+  background: none;
+}
+
+.taskforms-table--stacked td {
+  padding-top: 2px;
+  border-bottom: 0;
+}
+
+.taskform-arraytable__separator-cell {
+  padding: 0 0 10px !important;
+  border-bottom: 1px solid var(--tf-border) !important;
+  font-size: 0;
+  line-height: 0;
+}
+
+.taskform-arraytable__separator-row + tr > th,
+.taskform-arraytable__separator-row + tr > td {
+  padding-top: 14px;
+}
+
+.taskform-arraytable__separator-row:last-child > td {
+  border-bottom: 0 !important;
+}
+
+.taskforms-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.taskforms-badge--yes {
+  background: var(--tf-success-tint);
+  color: var(--tf-success);
+}
+
+.taskforms-badge--no {
+  background: #eef1f4;
+  color: var(--tf-text-muted);
+}
+
+/* Row classes, set with the 'css_class' key of a table row */
+.section--correct,
+.taskforms-table tr.section--correct > td {
+  background-color: var(--tf-success-tint);
+}
+
+.section--warning,
+.taskforms-table tr.section--warning > td {
+  background-color: var(--tf-warning-tint);
+}
+
+.section--error,
+.taskforms-table tr.section--error > td {
+  background-color: var(--tf-danger-tint);
+}
+
+.section--notice,
+.taskforms-table tr.section--notice > td {
+  background-color: var(--tf-primary-tint);
+}
+
+.section--ignored,
+.taskforms-table tr.section--ignored > td {
+  background-color: #faebf8;
+}
+
+/* The completion line Silverstripe adds after the task ("Task '...' completed successfully in 0 seconds") */
+body > span[style] {
+  display: block;
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--tf-border);
+  color: var(--tf-text-muted);
+  font-size: 13px;
+  font-weight: normal !important;
+}
+
+@media (max-width: 600px) {
+  body > h1:first-of-type {
+    padding-top: 34px;
+    font-size: 19px;
+  }
+
+  .taskforms-form {
+    padding: 18px 16px;
+  }
+
+  .taskforms-form__actions {
+    flex-direction: column;
+  }
+
+  .taskforms-back {
+    top: 10px;
+  }
+}

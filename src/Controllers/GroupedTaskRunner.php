@@ -3,205 +3,146 @@
     namespace Hamaka\TaskForms\Controllers;
 
     use Hamaka\TaskForms\TaskCategoryProvider;
+    use SilverStripe\Control\Controller;
     use SilverStripe\Control\Director;
     use SilverStripe\Core\ClassInfo;
     use SilverStripe\Core\Config\Config;
-    use SilverStripe\Core\Convert;
-    use SilverStripe\Dev\BuildTask;
     use SilverStripe\Dev\DebugView;
     use SilverStripe\Dev\TaskRunner;
     use SilverStripe\Dev\TestOnly;
+    use SilverStripe\Model\ArrayData;
+    use SilverStripe\Model\List\ArrayList;
+    use SilverStripe\Model\ModelData;
+    use SilverStripe\ORM\FieldType\DBHTMLText;
     use function _t;
     use function in_array;
     use function is_array;
+    use function is_string;
+    use function property_exists;
     use function singleton;
-    use function sizeof;
-    use function str_replace;
     use function strcmp;
+    use function trigger_error;
+    use function trim;
     use function uasort;
-    use function user_error;
     use const E_USER_WARNING;
 
     /**
-     * Class \GroupedTaskRunner
+     * Class \Hamaka\TaskForms\Controllers\GroupedTaskRunner
      *
+     * Replaces the core TaskRunner (through the Injector) to show the tasks on /dev/tasks grouped in categories.
+     * A task picks its category with a public static $category property. Categories are the built-in TASK_CAT_*
+     * categories plus the ones provided by implementors of TaskCategoryProvider. Running a task is left to the core
+     * TaskRunner.
      */
     class GroupedTaskRunner extends TaskRunner
     {
-        const TASK_CAT_PRIORITY = 'TASK_CAT_PRIORITY';
-        const TASK_CAT_STATS_AND_REPORTS = 'TASK_CAT_STATS_AND_REPORTS';
-        const TASK_CAT_MAINTENANCE = 'TASK_CAT_MAINTENANCE';
-        const TASK_CAT_TESTS = 'TASK_CAT_TESTS';
-        const TASK_CAT_OTHER = 'TASK_CAT_OTHER';
-        const TASK_CAT_HIDDEN = 'TASK_CAT_HIDDEN';
+        public const TASK_CAT_PRIORITY = 'TASK_CAT_PRIORITY';
+        public const TASK_CAT_STATS_AND_REPORTS = 'TASK_CAT_STATS_AND_REPORTS';
+        public const TASK_CAT_MAINTENANCE = 'TASK_CAT_MAINTENANCE';
+        public const TASK_CAT_TESTS = 'TASK_CAT_TESTS';
+        public const TASK_CAT_OTHER = 'TASK_CAT_OTHER';
+        // not registered as a category, so tasks in it are not listed (but can still be run through their URL)
+        public const TASK_CAT_HIDDEN = 'TASK_CAT_HIDDEN';
 
-        private static $url_handlers = [
-            ''                => 'index',
-            '$TaskName'       => 'runTask',
-            'queue/$TaskName' => 'queueTask',
-        ];
-
-        private static $allowed_actions = [
-            'index',
-            'runTask',
-            'queueTask',
-        ];
-
-        protected function init()
+        /**
+         * Renders the /dev/tasks overview: every task that may run in the browser, grouped under the categories from
+         * getCategories() in their sort order. Tasks whose category is not registered (e.g. TASK_CAT_HIDDEN) are not
+         * listed, but can still be run through their URL.
+         */
+        public function index(): DBHTMLText
         {
-            parent::init();
-        }
+            $sBaseUrl = Director::absoluteBaseURL();
+            $aTasks   = $this->getTasks();
 
-        public function index()
-        {
-            $aTasks = $this->getTasks();
-
-            // Web mode
-            if ( ! Director::is_cli()) {
-                $renderer = new DebugView();
-                echo $renderer->renderHeader();
-                echo $renderer->renderInfo("Development Tools: Tasks", Director::absoluteBaseURL());
-                $base = rtrim(Director::absoluteBaseURL(), '/')  . '/';
-
-                $aTaskCatOrder = $this->getCategories();
-
-                echo('<br>');
-
-                foreach ($aTaskCatOrder as $sCategoryCode => $aCategoryConfig) {
-
-                    $aTasksInCat = [];
-                    foreach ($aTasks as $aTaskConfig) {
-                        if ($aTaskConfig['category'] === $sCategoryCode) {
-                            $aTasksInCat[] = $aTaskConfig;
-                        }
-                    }
-
-                    if (sizeof($aTasksInCat) > 0) {
-                        echo "<h2 style='margin-bottom: 0;'>&nbsp;&nbsp;" . $aCategoryConfig['name'] . "</h2>";
-                        echo "<div class=\"options\" style='padding-top: 0;'>";
-                        echo "<ul>";
-
-                        foreach ($aTasksInCat as $aTaskConfig) {
-
-                            $sLinkImmediate = $base . "dev/tasks/" . $aTaskConfig['segment'];
-
-                            echo "<li><p>";
-                            echo "<a href=\"{$sLinkImmediate}\">" . $aTaskConfig['title'] . "</a>";
-
-                            echo "<br /><span class=\"description\">" . $aTaskConfig['description'] . "</span>";
-                            echo "</p></li>\n";
-                        }
-
-                        echo "</ul></div>";
-                    }
-                }
-
-                echo $renderer->renderFooter();
-                // CLI mode
-            }
-            else {
-                echo "SILVERSTRIPE DEVELOPMENT TOOLS: Tasks\n--------------------------\n\n";
+            $alCategories = ArrayList::create();
+            foreach ($this->getCategories() as $sCategoryCode => $aCategoryConfig) {
+                $alTasksInCat = ArrayList::create();
                 foreach ($aTasks as $aTaskConfig) {
-                    echo " * $aTaskConfig[title]: sake dev/tasks/" . $aTaskConfig['segment'] . "\n";
+                    if ($aTaskConfig['category'] === $sCategoryCode) {
+                        $alTasksInCat->push(ArrayData::create([
+                            'TaskLink'    => Controller::join_links($sBaseUrl, 'dev/tasks/', $aTaskConfig['segment']),
+                            'Title'       => $aTaskConfig['title'],
+                            'Description' => $aTaskConfig['description'],
+                            'Parameters'  => $aTaskConfig['parameters'],
+                            'Help'        => $aTaskConfig['help'],
+                        ]));
+                    }
+                }
+
+                if ($alTasksInCat->count() > 0) {
+                    $alCategories->push(ArrayData::create([
+                        'Title' => $aCategoryConfig['name'],
+                        'Tasks' => $alTasksInCat,
+                    ]));
                 }
             }
+
+            $oDebugView = DebugView::create();
+
+            $aData = [
+                'Categories' => $alCategories,
+                'Header'     => $this->addCssToHeader($oDebugView->renderHeader()),
+                'Footer'     => $oDebugView->renderFooter(),
+                'Info'       => $oDebugView->renderInfo('Development Tools: Tasks', $sBaseUrl),
+            ];
+
+            return ModelData::create()->renderWith(static::class, $aData);
         }
 
-        public function getCategories()
+        /**
+         * Returns all categories, sorted from high to low 'sort' value (and by name for equal values):
+         * the built-in TASK_CAT_* categories minus the ones in the removed_categories config, plus the categories of
+         * every TaskCategoryProvider. Extensions can change the result with updateCategories().
+         *
+         * Remove built-in categories in YML:
+         * SilverStripe\Dev\TaskRunner:
+         *   removed_categories:
+         *     - 'TASK_CAT_OTHER'
+         *
+         * @return array Map of category codes to ['name' => string, 'sort' => int]
+         */
+        public function getCategories(): array
         {
-            $aAllCategories = [];
+            $aAllCategories     = [];
+            $aRemovedCategories = (array)Config::forClass(TaskRunner::class)->get('removed_categories');
 
-            $oConfig = Config::forClass(TaskRunner::class);
+            // category code => [name, sort]
+            $aBuiltInCategories = [
+                static::TASK_CAT_PRIORITY          => [_t(__CLASS__ . '.CAT_PRIORITY_LABEL', 'Priority'), 100],
+                static::TASK_CAT_STATS_AND_REPORTS => [_t(__CLASS__ . '.CAT_STATS_AND_REPORTS_LABEL', 'Statistics and Reports'), 90],
+                static::TASK_CAT_MAINTENANCE       => [_t(__CLASS__ . '.CAT_MAINTENANCE_LABEL', 'Maintenance'), 70],
+                static::TASK_CAT_TESTS             => [_t(__CLASS__ . '.CAT_TESTS_LABEL', 'Tests'), 50],
+                static::TASK_CAT_OTHER             => [_t(__CLASS__ . '.CAT_OTHER_LABEL', 'Misc'), 10],
+            ];
 
-            /**
-             * YML:
-             * SilverStripe\Dev\TaskRunner:
-             *  removed_categories:
-             *      - 'TASK_CAT_OTHER'
-             */
-            $aRemovedCategories = (array)$oConfig->get('removed_categories');
-
-            if ( ! in_array(static::TASK_CAT_PRIORITY, $aRemovedCategories)) {
-                $aAllCategories[static::TASK_CAT_PRIORITY] = [
-                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_PRIORITY_LABEL', "Priority"),
-                    'sort' => 100,
-                ];
+            foreach ($aBuiltInCategories as $sCategoryCode => [$sName, $iSort]) {
+                if ( ! in_array($sCategoryCode, $aRemovedCategories)) {
+                    $aAllCategories[$sCategoryCode] = [
+                        'name' => $sName,
+                        'sort' => $iSort,
+                    ];
+                }
             }
 
-            if ( ! in_array(static::TASK_CAT_STATS_AND_REPORTS, $aRemovedCategories)) {
-                $aAllCategories[static::TASK_CAT_STATS_AND_REPORTS] = [
-                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_STATS_AND_REPORTS_LABEL', "Statistics and Reports"),
-                    'sort' => 90,
-                ];
-            }
+            foreach (ClassInfo::implementorsOf(TaskCategoryProvider::class) as $sProviderClass) {
+                $oCategoryProvider = singleton($sProviderClass);
 
-            if ( ! in_array(static::TASK_CAT_MAINTENANCE, $aRemovedCategories)) {
-                $aAllCategories[static::TASK_CAT_MAINTENANCE] = [
-                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_MAINTENANCE_LABEL', "Maintenance"),
-                    'sort' => 70,
-                ];
-            }
+                if ($oCategoryProvider instanceof TestOnly) {
+                    continue;
+                }
 
-            if ( ! in_array(static::TASK_CAT_TESTS, $aRemovedCategories)) {
-                $aAllCategories[static::TASK_CAT_TESTS] = [
-                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.CAT_TESTS_LABEL', "Tests"),
-                    'sort' => 50,
-                ];
-            }
+                $aCategoriesFromProvider = $oCategoryProvider->provideTaskCategory();
 
-            if ( ! in_array(static::TASK_CAT_OTHER, $aRemovedCategories)) {
-                $aAllCategories[static::TASK_CAT_OTHER] = [
-                    'name' => _t('Hamaka\\TaskForms\\Controllers\\GroupedTaskRunner.A', "Misc"),
-                    'sort' => 10,
-                ];
-            }
+                if ( ! $aCategoriesFromProvider) {
+                    continue;
+                }
 
-            $aClasses = ClassInfo::implementorsOf(TaskCategoryProvider::class);
-
-            if ($aClasses) {
-                foreach ($aClasses as $sClass) {
-
-                    $SNG = singleton($sClass);
-
-                    if ($SNG instanceof TestOnly) {
-                        continue;
-                    }
-
-                    $aSomeCategories = $SNG->provideTaskCategory();
-
-                    if ($aSomeCategories) {
-                        foreach ($aSomeCategories as $sCategoryCode => $aCategoryConfig) {
-                            if (is_array($aCategoryConfig)) {
-                                // There must be a name and optional a sort key.
-                                if ( ! isset($aCategoryConfig['name'])) {
-                                    user_error(
-                                        "The category $sCategoryCode must have a name key",
-                                        E_USER_WARNING
-                                    );
-                                }
-
-                                $aAllCategories[$sCategoryCode] = [
-                                    'name' => $aCategoryConfig['name'],
-                                    'sort' => isset($aCategoryConfig['sort']) ? $aCategoryConfig['sort'] : 0
-                                ];
-                            }
-                            else {
-                                $aAllCategories[$sCategoryCode] = [
-                                    'name' => $aCategoryConfig,
-                                    'sort' => 0
-                                ];
-                            }
-                        }
-                    }
+                foreach ($aCategoriesFromProvider as $sCategoryCode => $mCategoryConfig) {
+                    $aAllCategories[$sCategoryCode] = static::getCategoryConfigNormalized($sCategoryCode, $mCategoryConfig);
                 }
             }
 
             uasort($aAllCategories, [__CLASS__, 'sortCategories']);
-
-            //            $aResponse = [];
-            //            foreach ($aAllCategories as $sCategoryCode => $permissions) {
-            //                $aResponse = array_merge($aResponse, $permissions);
-            //            }
 
             $this->extend('updateCategories', $aAllCategories);
 
@@ -209,71 +150,77 @@
         }
 
         /**
-         * Sort categories based on their sort value, or name
+         * Adds the category to the tasks the core TaskRunner makes available in the browser.
          *
-         * @param array $a
-         * @param array $b
-         *
-         * @return int
+         * @return array Array of associative arrays for each task (Keys: 'class', 'title', 'segment', 'description',
+         *               'parameters', 'help', 'category')
          */
-        public static function sortCategories($a, $b)
+        protected function getTasks(): array
         {
-            if ($a['sort'] == $b['sort']) {
-                // Same sort value, do alpha instead
-                return strcmp($a['name'], $b['name']);
-            }
-            else {
-                // Just numeric.
-                return $a['sort'] > $b['sort'] ? -1 : 1;
-            }
-        }
+            $aAvailableTasks = parent::getTasks();
 
-        /**
-         * @return array Array of associative arrays for each task (Keys: 'class', 'title', 'description')
-         */
-        protected function getTasks()
-        {
-            $aAvailableTasks = [];
-            $aTaskClasses    = ClassInfo::subclassesFor(BuildTask::class);
-
-            // remove the base class
-            array_shift($aTaskClasses);
-
-            foreach ($aTaskClasses as $sClass) {
-                if ( ! $this->taskEnabled($sClass)) {
-                    continue;
-                }
-
-                $oSingleton = BuildTask::singleton($sClass);
-
-                $sCat = static::TASK_CAT_OTHER;
-
-                $sCatTemp = '';
-                if (property_exists($oSingleton, 'category')) {
-                    $sCatTemp = $oSingleton::$category;
-                }
-
-                //                $oConfig = Config::forClass(str_replace('\\', '-', $sClass));
-                //                var_dump($oConfig->get('url_segment'));
-                //                $sCatTemp = $oConfig->get('url_segment');
-
-                if (trim($sCatTemp) !== "") {
-                    $sCat = $sCatTemp;
-                }
-
-                $desc = (Director::is_cli())
-                    ? Convert::html2raw($oSingleton->getDescription())
-                    : $oSingleton->getDescription();
-
-                $aAvailableTasks[] = [
-                    'class'       => $sClass,
-                    'title'       => $oSingleton->getTitle(),
-                    'segment'     => $oSingleton->config()->segment ?: str_replace('\\', '-', $sClass),
-                    'description' => $desc,
-                    'category'    => $sCat
-                ];
+            foreach ($aAvailableTasks as &$aTaskConfig) {
+                $aTaskConfig['category'] = static::getTaskCategory($aTaskConfig['class']);
             }
 
             return $aAvailableTasks;
+        }
+
+        /**
+         * Comparison callback for uasort() that orders categories from high to low 'sort' value, and alphabetically
+         * by name when the sort values are equal. The name is kept for backwards compatibility.
+         *
+         * @param array $aCategoryA ['name' => string, 'sort' => int]
+         * @param array $aCategoryB ['name' => string, 'sort' => int]
+         */
+        public static function sortCategories(array $aCategoryA, array $aCategoryB): int
+        {
+            if ($aCategoryA['sort'] == $aCategoryB['sort']) {
+                return strcmp($aCategoryA['name'], $aCategoryB['name']);
+            }
+
+            return $aCategoryA['sort'] > $aCategoryB['sort'] ? -1 : 1;
+        }
+
+        /**
+         * Returns the category code of a task class. A task is put in a category by giving it a public static
+         * $category property with one of the TASK_CAT_* constants or a code provided by a TaskCategoryProvider.
+         * Tasks without (a non-empty) $category end up in TASK_CAT_OTHER.
+         *
+         * @param string $sClass FQCN of a BuildTask
+         */
+        public static function getTaskCategory(string $sClass): string
+        {
+            if (property_exists($sClass, 'category') && is_string($sClass::$category) && trim($sClass::$category) !== '') {
+                return $sClass::$category;
+            }
+
+            return static::TASK_CAT_OTHER;
+        }
+
+        /**
+         * Returns a category as provided by a TaskCategoryProvider in the form ['name' => string, 'sort' => int].
+         * A provider can give just the name, or an array with a 'name' and an optional 'sort' (default 0).
+         * Triggers a warning when the array has no name.
+         *
+         * @param mixed $mCategoryConfig The name, or ['name' => string, 'sort' => int]
+         */
+        protected static function getCategoryConfigNormalized(string $sCategoryCode, mixed $mCategoryConfig): array
+        {
+            if ( ! is_array($mCategoryConfig)) {
+                return [
+                    'name' => $mCategoryConfig,
+                    'sort' => 0,
+                ];
+            }
+
+            if ( ! isset($mCategoryConfig['name'])) {
+                trigger_error("The category $sCategoryCode must have a name key", E_USER_WARNING);
+            }
+
+            return [
+                'name' => $mCategoryConfig['name'],
+                'sort' => $mCategoryConfig['sort'] ?? 0,
+            ];
         }
     }

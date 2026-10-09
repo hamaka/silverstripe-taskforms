@@ -1,12 +1,11 @@
 ---
 Name: silverstripe-taskforms
+After: DevelopmentAdmin
 ---
 SilverStripe\Core\Injector\Injector:
   SilverStripe\Dev\TaskRunner:
     class: Hamaka\TaskForms\Controllers\GroupedTaskRunner
 SilverStripe\Dev\DevelopmentAdmin:
-  registered_controllers:
+  controllers:
     tasks:
-      controller: 'Hamaka\TaskForms\Controllers\GroupedTaskRunner'
-      links:
-        tasks: 'See a list of build tasks to run'
+      class: 'Hamaka\TaskForms\Controllers\GroupedTaskRunner'

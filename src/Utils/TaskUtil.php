@@ -2,157 +2,180 @@
 
     namespace Hamaka\TaskForms\Utils;
 
-    use Exception;
+    use SilverStripe\Control\Controller;
     use SilverStripe\Control\Director;
+    use SilverStripe\Core\Convert;
     use SilverStripe\ORM\DB;
+    use SilverStripe\PolyExecution\HttpRequestInput;
+    use Stringable;
+    use Symfony\Component\Console\Input\InputInterface;
+    use Symfony\Component\Console\Input\InputOption;
+    use function _t;
     use function array_filter;
+    use function array_key_exists;
     use function array_keys;
+    use function array_map;
+    use function array_values;
     use function count;
+    use function dirname;
+    use function escapeshellarg;
+    use function file_get_contents;
+    use function get_class;
+    use function html_entity_decode;
     use function implode;
-    use function in_array;
-    use function intval;
     use function is_array;
+    use function is_bool;
+    use function is_float;
+    use function is_int;
+    use function is_object;
+    use function is_scalar;
     use function is_string;
+    use function json_encode;
+    use function max;
+    use function mb_strlen;
     use function method_exists;
+    use function preg_match;
     use function print_r;
-    use function serialize;
-    use function sizeof;
+    use function rtrim;
+    use function str_repeat;
     use function str_replace;
+    use function strip_tags;
     use function time;
+    use function trim;
 
     /**
-     * Utility functions to make Silverstripe Tasks
+     * Class \Hamaka\TaskForms\Utils\TaskUtil
      *
+     * Static helpers to make Silverstripe BuildTasks interactive and better looking in the browser:
+     * - styled messages (echoGood(), echoNotice(), echoError() etc.) and layout helpers (headings, separators, tables)
+     * - a GET form that is generated from a map of request keys to variables (getFormHTML()), including the logic to
+     *   detect a first load, a dry run and a live run (isFirstLoadOrLoadWithoutAllRequiredFields(), isDryRun(),
+     *   isLiveRun())
+     *
+     * A task builds a map of request keys to references of its own variables, e.g. ['MemberID' => &$sMemberID].
+     * The helpers hydrate those variables from the request, so the task can use them directly.
+     *
+     * Messages (echoNormal() etc.), headings and table values are output as HTML, so tasks can use markup like links.
+     * Escape values from the request or the database yourself with Convert::raw2xml(). The generated form escapes
+     * its own labels and values.
+     * See \Hamaka\TaskForms\ExampleTask for a complete example.
      */
     class TaskUtil
     {
-        protected static $aExtraCSS = [];
+        // type values for DB::alteration_message() that result in the different message styles
+        public const ALT_MESSAGE_TYPE_CHANGED = 'changed'; // class info
+        public const ALT_MESSAGE_TYPE_COMMENT = 'created';
+        public const ALT_MESSAGE_TYPE_NOTICE = 'notice'; // class warning
+        public const ALT_MESSAGE_TYPE_ERROR = 'error'; // class error
 
-        const ALT_MESSAGE_TYPE_CHANGED = 'changed'; // class info
-        const ALT_MESSAGE_TYPE_COMMENT = 'created';
-        const ALT_MESSAGE_TYPE_NOTICE = 'notice'; // class warning
-        const ALT_MESSAGE_TYPE_ERROR = 'error'; // class error
+        // values for the $sLayout parameter of getArrayAsTable()
+        public const TABLE_LAYOUT_HORIZONTAL = 'horizontal';
+        public const TABLE_LAYOUT_STACKED = 'stacked';
 
-        public static function addCSS($sInput = "")
+        // key in a table row that holds a CSS class for that row instead of a column (e.g. 'section--error')
+        public const TABLE_ROW_CSS_CLASS_KEY = 'css_class';
+
+        // request key (and CLI option) that confirms the action after a dry run, with the value 1
+        public const EXECUTE_FIELD_NAME = 'execute';
+
+        // request key that the generated forms always send, to tell a submitted form from a first load
+        public const CACHEBUSTER_FIELD_NAME = 'cachebuster';
+
+        protected static array $aExtraCss = [];
+        // null means the translated default label
+        protected static ?string $sExecuteFieldLabel = null;
+
+        // input of the running task, see setInput()
+        protected static ?InputInterface $oInput = null;
+
+        /**
+         * Lets the helpers read the task's input (the InputInterface passed to execute()), so values can be passed as
+         * CLI options with sake as well as in the browser. Call it at the start of execute(). The task has to declare
+         * the options in getOptions(), see getInputOptionsForFields(). Without input, or for fields that are not an
+         * option, the helpers read the request ($_GET), which only works in the browser.
+         *
+         * Pass null to stop using the input, e.g. when several tasks run in one process.
+         */
+        public static function setInput(?InputInterface $oInput): void
         {
-            static::$aExtraCSS[] = $sInput;
+            static::$oInput = $oInput;
         }
 
-        public static function makePretty($bEnablePartyMode = false)
+        /**
+         * Returns the input options for the fields of a task form, to return from getOptions() in the task. Silverstripe
+         * then accepts them as CLI options (sake tasks:my-task --MemberID=3) and as request parameters, and lists them
+         * on /dev/tasks. Adds the execute option when the action needs to be previewed.
+         *
+         * @param array $aFieldNames                  The request keys of the form, the keys of $aGetKeyToVarMap
+         * @param bool  $bDoesActionNeedToBePreviewed Whether the user has to confirm the action after a dry run
+         * @return InputOption[]
+         */
+        public static function getInputOptionsForFields(array $aFieldNames, bool $bDoesActionNeedToBePreviewed = true): array
         {
-            $aHTML = [];
+            $aOptions = [];
 
-            if (Director::is_cli()) {
+            foreach ($aFieldNames as $sFieldName) {
+                $aOptions[] = new InputOption($sFieldName, null, InputOption::VALUE_REQUIRED, str_replace('_', ' ', $sFieldName));
+            }
+
+            if ($bDoesActionNeedToBePreviewed) {
+                $aOptions[] = new InputOption(static::EXECUTE_FIELD_NAME, null, InputOption::VALUE_REQUIRED, static::getExecuteFieldLabel());
+            }
+
+            return $aOptions;
+        }
+
+        /**
+         * Registers extra CSS that makePretty() adds to the page after the module's CSS, so it can override it.
+         * Call it before makePretty().
+         */
+        public static function addCSS(string $sCss = ''): void
+        {
+            static::$aExtraCss[] = $sCss;
+        }
+
+        /**
+         * Outputs the module's CSS (client/css/taskforms.css), followed by the CSS registered with addCSS(), to style
+         * the task output in the browser in the Silverstripe 6 look, plus a link back to /dev/tasks. Call it once at the
+         * start of a task. Does nothing on the command line.
+         *
+         * @param bool $bEnablePartyMode Shows the headings in Comic Sans
+         * @return bool Whether the CSS was output
+         */
+        public static function makePretty(bool $bEnablePartyMode = false): bool
+        {
+            if (static::isOutputForCli()) {
                 return false;
             }
 
-            $aHTML[] = "<style>
-";
+            $aCss = [static::getModuleFileContents('client/css/taskforms.css')];
 
             if ($bEnablePartyMode === true) {
-                $aHTML[] = "h1 {
-                  font-family: \"Comic Sans MS\", \"Comic Sans\", cursive;
-                }
-
-
-                ";
+                $aCss[] = 'h1 { font-family: "Comic Sans MS", "Comic Sans", cursive; }';
             }
 
-            if (sizeof(static::$aExtraCSS) > 0) {
-                foreach (static::$aExtraCSS as $sCSS) {
-                    $aHTML[] = "
-" . $sCSS . "
-";
-                }
+            // after the module's CSS, so it can override it
+            foreach (static::$aExtraCss as $sCss) {
+                $aCss[] = $sCss;
             }
 
-            $aHTML[] = "
+            echo('<meta name="viewport" content="width=device-width, initial-scale=1">');
+            echo('<style>' . "\n" . implode("\n", $aCss) . "\n" . '</style>');
+            echo('<a class="taskforms-back" href="' . Convert::raw2att(Controller::join_links(Director::absoluteBaseURL(), 'dev/tasks')) . '">'
+                . Convert::raw2xml(_t(__CLASS__ . '.LINK_ALL_TASKS', 'All tasks')) . '</a>');
 
-								body {
-									font-family: Arial, sans-serif;
-									font-weight: normal;
-								}
-
-                pre code {
-                    background-color: #eee;
-                    border: 1px solid #999;
-                    display: block;
-                    padding: 20px;
-                    color: #000;
-                }
-
-                .section--correct {
-                    background-color: #d0dcb9;
-                }
-
-                .section--warning {
-                    background-color: #ffebcc;
-                }
-
-                .section--error {
-                    background-color: #f45656;
-                }
-
-                .section--notice {
-                    background-color: #eee;
-                }
-
-                .section--ignored {
-                    background-color: #faebf8;
-                }
-
-                li {
-                  font-size: 15px;
-                  font-family: \"Helvetica Neue\", Helvetica, Arial, sans-serif;
-                  line-height: 1.5;
-                }
-
-               .warning {
-                    color: #ffa717;
-                    font-weight: bold;
-                    text-decoration: ;
-                }
-
-               .success {
-                    text-indent: 50px;
-                }
-
-               .error {
-                    color: #ef1717;
-                    font-size: 17px;
-                    font-weight: bold;
-                }
-
-               .info {
-                  color: darkgreen;
-                  font-weight: 700;
-                }
-
-                th {
-                  text-align: left;
-                }
-
-                tr:nth-child(even) {
-                  background-color: #eee;
-                }
-
-                td, th {
-                  padding: 10px;
-                }
-
-                .fieldlabel {
-                  display: inline-block;
-                  font-size: 12px;
-                  margin-bottom: 5px;
-                }
-
-                </style>
-            ";
-
-            echo(implode('', $aHTML));
+            return true;
         }
 
-        public static function isDryRun($aFieldNamesAndVars, $aRequiredFieldsNamesAndVars, $bDoesActionNeedToBePreviewed = true)
+        /**
+         * Whether the task should only show what it would do. True on a first load (not all required fields are
+         * filled in) and, when the action needs to be previewed, as long as the execute confirmation is missing.
+         *
+         * @param array $aFieldNamesAndVars          Map of request keys to references of the task's variables
+         * @param array $aRequiredFieldsNamesAndVars List of required request keys, or a map of request keys to references
+         * @param bool  $bDoesActionNeedToBePreviewed Whether the user has to confirm the action after a dry run
+         */
+        public static function isDryRun(array $aFieldNamesAndVars, array $aRequiredFieldsNamesAndVars, bool $bDoesActionNeedToBePreviewed = true): bool
         {
             // To make things easy we mark a first load as a dry run
             // isFirstLoad can be called stand alone to specify different behaviour on first load
@@ -160,14 +183,22 @@
                 return true;
             }
 
-            if ($bDoesActionNeedToBePreviewed === true && ! TaskUtil::doesRequestContainExecuteConfirmation()) {
+            if ($bDoesActionNeedToBePreviewed === true && ! static::doesRequestContainExecuteConfirmation()) {
                 return true;
             }
 
             return false;
         }
 
-        public static function isLiveRun($aFieldNamesAndVars, $aRequiredFieldsNamesAndVars, $bDoesActionNeedToBePreviewed = true)
+        /**
+         * Whether the task should actually make its changes: all required fields are filled in and, when the action
+         * needs to be previewed, the execute confirmation is present. The opposite of isDryRun().
+         *
+         * @param array $aFieldNamesAndVars          Map of request keys to references of the task's variables
+         * @param array $aRequiredFieldsNamesAndVars List of required request keys, or a map of request keys to references
+         * @param bool  $bDoesActionNeedToBePreviewed Whether the user has to confirm the action after a dry run
+         */
+        public static function isLiveRun(array $aFieldNamesAndVars, array $aRequiredFieldsNamesAndVars, bool $bDoesActionNeedToBePreviewed = true): bool
         {
             if (static::isFirstLoadOrLoadWithoutAllRequiredFields($aFieldNamesAndVars, $aRequiredFieldsNamesAndVars)) {
                 return false;
@@ -180,54 +211,86 @@
             return true;
         }
 
-        public static function doWeOnlyShowPreview($bDoesActionNeedToBePreviewed = true)
+        /**
+         * Whether the request lacks the execute confirmation, so only a preview should be shown.
+         *
+         * @param bool $bDoesActionNeedToBePreviewed Not used; kept for backwards compatibility
+         */
+        public static function doWeOnlyShowPreview(bool $bDoesActionNeedToBePreviewed = true): bool
         {
-            return ! TaskUtil::doesRequestContainExecuteConfirmation();
+            return ! static::doesRequestContainExecuteConfirmation();
         }
 
-        public static function isFirstLoadOrLoadWithoutAllRequiredFields($aFieldNamesAndVars, $aRequiredFieldsNamesAndVars)
+        /**
+         * Whether the form still has to be shown because not all required fields are in the request. Hydrates the
+         * task's variables from the request as a side effect.
+         *
+         * @param array $aFieldNamesAndVars          Map of request keys to references of the task's variables
+         * @param array $aRequiredFieldsNamesAndVars List of required request keys, or a map of request keys to references
+         */
+        public static function isFirstLoadOrLoadWithoutAllRequiredFields(array $aFieldNamesAndVars, array $aRequiredFieldsNamesAndVars): bool
         {
-            return ! TaskUtil::areAllRequiredFieldsSet($aFieldNamesAndVars, $aRequiredFieldsNamesAndVars);
+            return ! static::areAllRequiredFieldsSet($aFieldNamesAndVars, $aRequiredFieldsNamesAndVars);
         }
 
-        public static function hydrateVarsFromRequest($aGetKeyToVarMap = [])
+        /**
+         * Copies the values of the request (GET), or of the task's input options (see setInput()), into the task's
+         * variables.
+         *
+         * @param array $aGetKeyToVarMap Map of request keys to references of the task's variables
+         */
+        public static function hydrateVarsFromRequest(array $aGetKeyToVarMap = []): void
         {
-            foreach ($aGetKeyToVarMap as $sGetKey => &$oVar) {
-                if (isset($_GET[$sGetKey])) {
-                    $oVar = $_GET[$sGetKey];
+            foreach ($aGetKeyToVarMap as $sGetKey => &$mVar) {
+                $mValue = static::getRequestValue($sGetKey);
+
+                if ($mValue !== null) {
+                    $mVar = $mValue;
                 }
             }
         }
 
-        public static function doesRequestContainExecuteConfirmation()
+        /**
+         * Whether the user confirmed the action after the dry run: execute=1 in the request, or --execute=1 on the
+         * command line.
+         */
+        public static function doesRequestContainExecuteConfirmation(): bool
         {
-            if (isset($_GET['execute']) && intval($_GET['execute']) === 1) {
+            $mValue = static::getRequestValue(static::EXECUTE_FIELD_NAME);
+
+            if (is_scalar($mValue) && (int)$mValue === 1) {
                 return true;
             }
 
             return false;
         }
 
-        public static function areAllRequiredFieldsSet($aFieldNamesAndVars, $aRequiredFieldsNamesAndVars = false)
+        /**
+         * Whether all required fields are in the request with a value. Hydrates the task's variables from the request
+         * first. A field without a value, or with only whitespace, counts as missing.
+         *
+         * @param array $aFieldNamesAndVars          Map of request keys to references of the task's variables
+         * @param array $aRequiredFieldsNamesAndVars List of required fields, by request key ('New_FirstName') or by
+         *                                           label ('New FirstName'), or a map of request keys to references
+         */
+        public static function areAllRequiredFieldsSet(array $aFieldNamesAndVars, array $aRequiredFieldsNamesAndVars = []): bool
         {
             static::hydrateVarsFromRequest($aFieldNamesAndVars);
 
             $bAreAllPresent = true;
 
-            if (count(array_filter(array_keys($aRequiredFieldsNamesAndVars), 'is_string')) > 0) {
-                foreach ($aRequiredFieldsNamesAndVars as $sGetKey => &$oVar) {
-                    if ( ! is_string($oVar)) {
+            if (static::isRequiredFieldsAMap($aRequiredFieldsNamesAndVars)) {
+                foreach ($aRequiredFieldsNamesAndVars as $sGetKey => &$mVar) {
+                    if ( ! static::isValueFilledIn($mVar)) {
                         $bAreAllPresent = false;
                     }
                 }
             }
             else {
                 foreach ($aRequiredFieldsNamesAndVars as $sFieldName) {
-                    foreach ($aFieldNamesAndVars as $sGetKey => &$oVar) {
-                        if ($sGetKey === $sFieldName) {
-                            if ( ! is_string($oVar)) {
-                                $bAreAllPresent = false;
-                            }
+                    foreach ($aFieldNamesAndVars as $sGetKey => &$mVar) {
+                        if (static::isFieldNameForGetKey($sFieldName, $sGetKey) && ! static::isValueFilledIn($mVar)) {
+                            $bAreAllPresent = false;
                         }
                     }
                 }
@@ -236,512 +299,722 @@
             return $bAreAllPresent;
         }
 
-        protected static function getAsString($oMessage)
+        /**
+         * Outputs a message in the default style. Values that are not strings are shown with print_r().
+         */
+        public static function echoNormal(mixed $mMessage): void
         {
-            if (is_string($oMessage)) {
-                return $oMessage;
+            DB::alteration_message(static::getAsString($mMessage));
+        }
+
+        /**
+         * Outputs a message in the success style (green). Values that are not strings are shown with print_r().
+         */
+        public static function echoGood(mixed $mMessage): void
+        {
+            DB::alteration_message(static::getAsString($mMessage), static::ALT_MESSAGE_TYPE_CHANGED);
+        }
+
+        /**
+         * Outputs a message in the warning style (orange). Values that are not strings are shown with print_r().
+         */
+        public static function echoNotice(mixed $mMessage): void
+        {
+            DB::alteration_message(static::getAsString($mMessage), static::ALT_MESSAGE_TYPE_NOTICE);
+        }
+
+        /**
+         * Outputs a message in the error style (red). Values that are not strings are shown with print_r().
+         */
+        public static function echoError(mixed $mMessage): void
+        {
+            DB::alteration_message(static::getAsString($mMessage), static::ALT_MESSAGE_TYPE_ERROR);
+        }
+
+        /**
+         * Outputs an indented message, meant as a comment on the previous message. Values that are not strings are
+         * shown with print_r().
+         */
+        public static function echoCommentOnPrev(mixed $mMessage): void
+        {
+            DB::alteration_message(static::getAsString($mMessage), static::ALT_MESSAGE_TYPE_COMMENT);
+        }
+
+        /**
+         * Outputs vertical whitespace.
+         */
+        public static function echoSpace(): void
+        {
+            echo(static::isOutputForCli() ? "\n" : '<div class="taskforms-space"></div>');
+        }
+
+        /**
+         * Outputs a horizontal line.
+         */
+        public static function echoSeparator(): void
+        {
+            if (static::isOutputForCli()) {
+                echo("\n" . str_repeat('-', 60) . "\n\n");
+                return;
             }
 
-            return '<pre>' . print_r($oMessage, true) . '</pre>';
+            echo('<hr class="taskforms-separator">');
         }
 
-        public static function echoNormal($oMessage)
+        /**
+         * Outputs a heading. On the command line the label is underlined: with = for level 1 and 2, with - for the
+         * other levels.
+         *
+         * @param int $iHeadingLevel 1 to 6 for <h1> to <h6>
+         */
+        public static function echoHeading(string $sLabel = '', int $iHeadingLevel = 2): void
         {
-            DB::alteration_message(static::getAsString($oMessage));
+            if (static::isOutputForCli()) {
+                $sText = static::getHtmlAsText($sLabel);
+                echo("\n" . $sText . "\n" . str_repeat($iHeadingLevel <= 2 ? '=' : '-', mb_strlen($sText)) . "\n");
+                return;
+            }
+
+            echo('<h' . $iHeadingLevel . ' class="taskforms-heading">' . $sLabel . '</h' . $iHeadingLevel . '>');
         }
 
-        public static function echoGood($oMessage)
+        /**
+         * Outputs the form of getFormHTML(). On the command line it outputs the fields with their values instead,
+         * see getFormText().
+         *
+         * @see getFormHTML()
+         */
+        public static function echoFormHTML(array $aGetKeyToVarMap = [], array $aRequiredFieldsNamesAndVars = [], bool $bDoesActionNeedToBePreviewed = false, array $aCustomComponents = []): void
         {
-            DB::alteration_message(static::getAsString($oMessage), TaskUtil::ALT_MESSAGE_TYPE_CHANGED);
-        }
+            if (static::isOutputForCli()) {
+                echo(static::getFormText($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars, $bDoesActionNeedToBePreviewed));
+                return;
+            }
 
-        public static function echoNotice($oMessage)
-        {
-            DB::alteration_message(static::getAsString($oMessage), TaskUtil::ALT_MESSAGE_TYPE_NOTICE);
-        }
-
-        public static function echoError($oMessage)
-        {
-            DB::alteration_message(static::getAsString($oMessage), TaskUtil::ALT_MESSAGE_TYPE_ERROR);
-        }
-
-        public static function echoCommentOnPrev($oMessage)
-        {
-            DB::alteration_message(static::getAsString($oMessage), TaskUtil::ALT_MESSAGE_TYPE_COMMENT);
-        }
-
-        public static function echoSpace()
-        {
-            echo('<br><br>');
-        }
-
-        public static function echoSeparator()
-        {
-            echo('<hr style="margin-top:20px; margin-bottom: 20px;" >');
-        }
-
-        public static function echoHeading($sLabel = '', $iHeadingLevel = 2)
-        {
-            echo('<h' . intval($iHeadingLevel) . '>' . $sLabel . '</h' . intval($iHeadingLevel) . '>');
-        }
-
-        public static function echoFormHTML($aGetKeyToVarMap = [], $aRequiredFieldsNamesAndVars = [], $bDoesActionNeedToBePreviewed = false, $aCustomComponents = [])
-        {
             echo(static::getFormHTML($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars, $bDoesActionNeedToBePreviewed, $aCustomComponents));
         }
 
-        public static function getFormHTML($aGetKeyToVarMap = [], $aRequiredFieldsNamesAndVars = [], $bDoesActionNeedToBePreviewed = false, $aCustomComponents = [])
+        /**
+         * Returns the input of a task as plain text for the command line: every field as a CLI option with its current
+         * value, which required fields are missing and, after a dry run, how to execute the task.
+         *
+         * @see getFormHTML()
+         */
+        public static function getFormText(array $aGetKeyToVarMap = [], array $aRequiredFieldsNamesAndVars = [], bool $bDoesActionNeedToBePreviewed = false): string
         {
-            static::hydrateVarsFromRequest($aGetKeyToVarMap);
-            $bIsFirstLoad     = static::isFirstLoadOrLoadWithoutAllRequiredFields($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars);
-            $bIsDryRun        = static::isDryRun($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars, $bDoesActionNeedToBePreviewed);
-            $bAddExecuteField = $bDoesActionNeedToBePreviewed && ! $bIsFirstLoad && $bIsDryRun;
+            // also hydrates the task's variables from the request
+            $bIsExecuteFieldNeeded = static::isExecuteFieldNeeded($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars, $bDoesActionNeedToBePreviewed);
 
-            $aHTML = [];
+            $aLines              = [_t(__CLASS__ . '.CLI_INPUT', 'Input:')];
+            $bAreAllFieldsOption = true;
 
-            $aHTML[] = '<form action="" method="get" >';
+            foreach ($aGetKeyToVarMap as $sGetKey => $mVar) {
+                $sLine = '  --' . $sGetKey . '=';
 
-            foreach ($aGetKeyToVarMap as $sGetKey => &$sVar) {
-                $sFieldLabel = str_replace('_', ' ', $sGetKey);
-                if ( ! is_string($sVar)) {
-                    $sVar = '';
+                if (static::isValueFilledIn($mVar)) {
+                    $sLine .= preg_match('/^[\w.,:@\/-]+$/', $mVar) ? $mVar : escapeshellarg($mVar);
+                }
+                elseif (static::isFieldRequired($sGetKey, $aRequiredFieldsNamesAndVars)) {
+                    $sLine .= '  ' . _t(__CLASS__ . '.CLI_REQUIRED_MISSING', '(required, missing)');
                 }
 
-                if (in_array($sGetKey, array_keys($aCustomComponents))) {
-                    if (is_string($aCustomComponents[$sGetKey])) {
-                        // a component can be passed as string but the downside: the value is not set
-                        $aHTML[] = $aCustomComponents[$sGetKey];
-                    }
-                    elseif (method_exists($aCustomComponents[$sGetKey], 'forTemplate')) {
-                        if (method_exists($aCustomComponents[$sGetKey], 'setValue')) {
-                            $aCustomComponents[$sGetKey]->setValue($sVar);
-                        }
+                $aLines[]            = $sLine;
+                $bAreAllFieldsOption = $bAreAllFieldsOption && static::isFieldAnInputOption($sGetKey);
+            }
 
-                        $aHTML[] = '<span class=\'fieldlabel\'>' . $sFieldLabel . ':</span><br/>';
-                        $aHTML[] = $aCustomComponents[$sGetKey]->forTemplate() . '<br/><br/>';
+            if ($bIsExecuteFieldNeeded) {
+                $aLines[] = '  --' . static::EXECUTE_FIELD_NAME . '=1  (' . static::getExecuteFieldLabel() . ')';
+            }
+
+            if ( ! $bAreAllFieldsOption) {
+                $aLines[] = _t(
+                    __CLASS__ . '.CLI_OPTIONS_MISSING',
+                    'This task does not accept all of these options yet: return TaskUtil::getInputOptionsForFields() from getOptions() in the task and call TaskUtil::setInput() in execute().'
+                );
+            }
+
+            return implode("\n", $aLines) . "\n";
+        }
+
+        /**
+         * Returns a GET form with a field for every request key in $aGetKeyToVarMap, filled with the current values.
+         * After the first load of a task that needs to be previewed, a checkbox asks to confirm the action
+         * (EXECUTE_FIELD_NAME=1).
+         * Labels are the titles of custom FormFields, or the request keys with underscores replaced by spaces. Required
+         * fields are marked, and after submitting, a required field without a value gets a message. Labels and values
+         * are escaped, because the values come from the request.
+         *
+         * @param array $aGetKeyToVarMap              Map of request keys to references of the task's variables
+         * @param array $aRequiredFieldsNamesAndVars  List of required request keys, or a map of request keys to references
+         * @param bool  $bDoesActionNeedToBePreviewed Whether the user has to confirm the action after a dry run
+         * @param array $aCustomComponents            Map of request keys to a FormField (or another object with
+         *                                            forTemplate()) or an HTML string, to use instead of a text field.
+         *                                            The value of an HTML string is not filled in.
+         */
+        public static function getFormHTML(array $aGetKeyToVarMap = [], array $aRequiredFieldsNamesAndVars = [], bool $bDoesActionNeedToBePreviewed = false, array $aCustomComponents = []): string
+        {
+            // also hydrates the task's variables from the request
+            $bIsFirstLoad          = static::isFirstLoadOrLoadWithoutAllRequiredFields($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars);
+            $bIsExecuteFieldNeeded = static::isExecuteFieldNeeded($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars, $bDoesActionNeedToBePreviewed);
+
+            $bIsSubmitted = isset($_GET[static::CACHEBUSTER_FIELD_NAME]);
+
+            $aHtml   = [];
+            $aHtml[] = '<form class="taskforms-form' . ($bIsExecuteFieldNeeded ? ' taskforms-form--dry-run' : '') . '" action="" method="get">';
+            $aHtml[] = '<div class="taskforms-form__fields">';
+
+            foreach ($aGetKeyToVarMap as $sGetKey => &$mVar) {
+                if ( ! is_string($mVar)) {
+                    $mVar = '';
+                }
+
+                $bIsRequired  = static::isFieldRequired($sGetKey, $aRequiredFieldsNamesAndVars);
+                $bIsMissing   = $bIsSubmitted && $bIsRequired && ! static::isValueFilledIn($mVar);
+                $mComponent   = $aCustomComponents[$sGetKey] ?? null;
+                $sInputId     = 'taskforms-field-' . Convert::raw2htmlid($sGetKey);
+                $sControlHtml = '';
+
+                if (is_string($mComponent)) {
+                    // a component can be passed as string but the downside: the value is not set
+                    $sControlHtml = $mComponent;
+                    $sInputId     = '';
+                }
+                elseif (is_object($mComponent) && method_exists($mComponent, 'forTemplate')) {
+                    if (method_exists($mComponent, 'setValue')) {
+                        $mComponent->setValue($mVar);
                     }
+
+                    $sControlHtml = (string)$mComponent->forTemplate();
+                    $sInputId     = method_exists($mComponent, 'ID') ? (string)$mComponent->ID() : '';
                 }
                 else {
-                    $aHTML[] = '<span class=\'fieldlabel\'>' . $sFieldLabel . ':</span><br/>';
-                    $aHTML[] = '<input type="text" name="' . $sGetKey . '" value="' . $sVar . '" "><br/><br/>';
+                    $sControlHtml = '<input type="text" class="taskforms-field__input" id="' . $sInputId . '" name="' . Convert::raw2att($sGetKey) . '" value="' . Convert::raw2att($mVar) . '"' . ($bIsMissing ? ' aria-invalid="true"' : '') . '>';
                 }
+
+                $aHtml[] = '<div class="taskforms-field' . ($bIsMissing ? ' taskforms-field--missing' : '') . '">';
+                $aHtml[] = '<label class="taskforms-field__label"' . ($sInputId !== '' ? ' for="' . Convert::raw2att($sInputId) . '"' : '') . '>'
+                    . Convert::raw2xml(static::getFieldLabel($sGetKey, $mComponent))
+                    . ($bIsRequired ? ' <span class="taskforms-field__required">' . Convert::raw2xml(_t(__CLASS__ . '.FIELD_REQUIRED', 'required')) . '</span>' : '')
+                    . '</label>';
+                $aHtml[] = $sControlHtml;
+
+                if ($bIsMissing) {
+                    $aHtml[] = '<p class="taskforms-field__message">' . Convert::raw2xml(_t(__CLASS__ . '.FIELD_MISSING', 'Please fill in this field.')) . '</p>';
+                }
+
+                $aHtml[] = '</div>';
             }
 
-            if ($bAddExecuteField) {
-                //$aHTML[] = '<input type="hidden" name="previewed" value="1">';
-                $aHTML[] = '<span class=\'fieldlabel\'>' . static::getExecuteFieldLabel() . ':</span><br/>';
-                $aHTML[] = '<input type="text" name="execute"><br/><br/>';
+            $aHtml[] = '</div>';
+
+            if ($bIsExecuteFieldNeeded) {
+                $aHtml[] = '<div class="taskforms-confirm">';
+                $aHtml[] = '<label class="taskforms-confirm__label"><input type="checkbox" name="' . static::EXECUTE_FIELD_NAME . '" value="1" class="taskforms-confirm__checkbox"'
+                    . ' onchange="var b=this.form.querySelector(\'[data-label-checked]\');b.textContent=this.checked?b.dataset.labelChecked:b.dataset.labelUnchecked;b.classList.toggle(\'taskforms-button--danger\',this.checked);">'
+                    . ' <span>' . static::getExecuteFieldLabel() . '</span></label>';
+                $aHtml[] = '<p class="taskforms-confirm__hint">' . Convert::raw2xml(_t(__CLASS__ . '.CONFIRM_HINT', 'Changes are only made when this box is ticked.')) . '</p>';
+                $aHtml[] = '</div>';
             }
 
-            $aHTML[] = '<input type="hidden" name="cachebuster" value="' . time() . '">';
+            $aHtml[] = '<input type="hidden" name="' . static::CACHEBUSTER_FIELD_NAME . '" value="' . time() . '">';
+            $aHtml[] = '<div class="taskforms-form__actions">';
 
-            if ($bDoesActionNeedToBePreviewed === true && $bIsFirstLoad) {
-                $aHTML[] = '<input type="submit" value="Preview">';
+            if ($bIsExecuteFieldNeeded) {
+                $sLabelUnchecked = _t(__CLASS__ . '.BUTTON_PREVIEW_AGAIN', 'Preview again');
+                $sLabelChecked   = _t(__CLASS__ . '.BUTTON_EXECUTE', 'Execute task');
+                $aHtml[]         = '<button type="submit" class="taskforms-button taskforms-button--primary" data-label-unchecked="' . Convert::raw2att($sLabelUnchecked) . '" data-label-checked="' . Convert::raw2att($sLabelChecked) . '">' . Convert::raw2xml($sLabelUnchecked) . '</button>';
+            }
+            elseif ($bDoesActionNeedToBePreviewed === true && $bIsFirstLoad) {
+                $aHtml[] = '<button type="submit" class="taskforms-button taskforms-button--primary">' . Convert::raw2xml(_t(__CLASS__ . '.BUTTON_PREVIEW', 'Preview')) . '</button>';
             }
             else {
-                $aHTML[] = '<input type="submit" value="Submit">';
+                $aHtml[] = '<button type="submit" class="taskforms-button taskforms-button--primary">' . Convert::raw2xml(_t(__CLASS__ . '.BUTTON_SUBMIT', 'Submit')) . '</button>';
             }
 
-            $aHTML[] = '</form>';
+            $aHtml[] = '</div>';
+            $aHtml[] = '</form>';
 
-            return implode('
-            ', $aHTML);
+            return implode("\n", $aHtml);
         }
 
-        protected static $sExecuteFieldLabel = 'Type 1 to execute the task';
-
-        public static function setExecuteFieldLabel($sInput)
+        /**
+         * Sets the label of the checkbox that confirms the action after a dry run, e.g. 'Yes, delete these records'.
+         *
+         * @param mixed $mExecuteFieldLabel Ignored when it is not a string
+         */
+        public static function setExecuteFieldLabel(mixed $mExecuteFieldLabel): void
         {
-            if (is_string($sInput)) {
-                static::$sExecuteFieldLabel = $sInput;
+            if (is_string($mExecuteFieldLabel)) {
+                static::$sExecuteFieldLabel = $mExecuteFieldLabel;
             }
         }
 
-        public static function getExecuteFieldLabel()
+        /**
+         * Returns the label of the checkbox that confirms the action after a dry run: the one set with
+         * setExecuteFieldLabel(), or the translated default.
+         */
+        public static function getExecuteFieldLabel(): string
         {
-            return static::$sExecuteFieldLabel;
+            return static::$sExecuteFieldLabel ?? _t(__CLASS__ . '.EXECUTE_FIELD_LABEL', 'Yes, execute the task');
         }
 
-        public static function echoResetFormHTML()
+        /**
+         * Outputs the form of getResetFormHTML(). Does nothing on the command line.
+         */
+        public static function echoResetFormHTML(): void
         {
+            if (static::isOutputForCli()) {
+                return;
+            }
+
             echo(static::getResetFormHTML());
         }
 
-        public static function getResetFormHTML()
+        /**
+         * Returns a form with a button that reloads the task without any input, to start over.
+         */
+        public static function getResetFormHTML(): string
         {
-            $aHTML = [];
+            $aHtml = [];
 
-            $aHTML[] = '<form action="" method="get" >';
-            $aHTML[] = '<input type="hidden" name="cachebuster" value="' . time() . '">';
-            $aHTML[] = '<input type="submit" value="restart">';
-            $aHTML[] = '</form>';
+            $aHtml[] = '<form class="taskforms-reset" action="" method="get">';
+            $aHtml[] = '<input type="hidden" name="' . static::CACHEBUSTER_FIELD_NAME . '" value="' . time() . '">';
+            $aHtml[] = '<button type="submit" class="taskforms-button">' . Convert::raw2xml(_t(__CLASS__ . '.BUTTON_RESTART', 'Start over')) . '</button>';
+            $aHtml[] = '</form>';
 
-            return implode('
-            ', $aHTML);
+            return implode("\n", $aHtml);
         }
 
-        public static function addConfetti()
+        /**
+         * Outputs a confetti animation (client/js/confetti.js) that runs for 10 seconds, to celebrate a finished task.
+         * Does nothing on the command line.
+         */
+        public static function addConfetti(): void
         {
-            if (Director::is_cli() !== true) {
-                echo '
-  <script>var confetti = {
-	maxCount: 100,		//set max confetti count
-	speed: 2,			//set the particle animation speed
-	frameInterval: 15,	//the confetti animation frame interval in milliseconds
-	alpha: 1.0,			//the alpha opacity of the confetti (between 0 and 1, where 1 is opaque and 0 is invisible)
-	gradient: false,	//whether to use gradients for the confetti particles
-	start: null,		//call to start confetti animation (with optional timeout in milliseconds, and optional min and max random confetti count)
-	stop: null,			//call to stop adding confetti
-	toggle: null,		//call to start or stop the confetti animation depending on whether its already running
-	pause: null,		//call to freeze confetti animation
-	resume: null,		//call to unfreeze confetti animation
-	togglePause: null,	//call to toggle whether the confetti animation is paused
-	remove: null,		//call to stop the confetti animation and remove all confetti immediately
-	isPaused: null,		//call and returns true or false depending on whether the confetti animation is paused
-	isRunning: null		//call and returns true or false depending on whether the animation is running
-};
-
-
-	confetti.start = startConfetti;
-	confetti.stop = stopConfetti;
-	confetti.toggle = toggleConfetti;
-	confetti.pause = pauseConfetti;
-	confetti.resume = resumeConfetti;
-	confetti.togglePause = toggleConfettiPause;
-	confetti.isPaused = isConfettiPaused;
-	confetti.remove = removeConfetti;
-	confetti.isRunning = isConfettiRunning;
-	var supportsAnimationFrame = window.requestAnimationFrame || window.webkitRequestAnimationFrame || window.mozRequestAnimationFrame || window.oRequestAnimationFrame || window.msRequestAnimationFrame;
-	var colors = ["rgba(30,144,255,", "rgba(107,142,35,", "rgba(255,215,0,", "rgba(255,192,203,", "rgba(106,90,205,", "rgba(173,216,230,", "rgba(238,130,238,", "rgba(152,251,152,", "rgba(70,130,180,", "rgba(244,164,96,", "rgba(210,105,30,", "rgba(220,20,60,"];
-	var streamingConfetti = false;
-	var animationTimer = null;
-	var pause = false;
-	var lastFrameTime = Date.now();
-	var particles = [];
-	var waveAngle = 0;
-	var context = null;
-
-	function resetParticle(particle, width, height) {
-		particle.color = colors[(Math.random() * colors.length) | 0] + (confetti.alpha + ")");
-		particle.color2 = colors[(Math.random() * colors.length) | 0] + (confetti.alpha + ")");
-		particle.x = Math.random() * width;
-		particle.y = Math.random() * height - height;
-		particle.diameter = Math.random() * 10 + 5;
-		particle.tilt = Math.random() * 10 - 10;
-		particle.tiltAngleIncrement = Math.random() * 0.07 + 0.05;
-		particle.tiltAngle = Math.random() * Math.PI;
-		return particle;
-	}
-
-	function toggleConfettiPause() {
-		if (pause)
-			resumeConfetti();
-		else
-			pauseConfetti();
-	}
-
-	function isConfettiPaused() {
-		return pause;
-	}
-
-	function pauseConfetti() {
-		pause = true;
-	}
-
-	function resumeConfetti() {
-		pause = false;
-		runAnimation();
-	}
-
-	function runAnimation() {
-		if (pause)
-			return;
-		else if (particles.length === 0) {
-			context.clearRect(0, 0, window.innerWidth, window.innerHeight);
-			animationTimer = null;
-		} else {
-			var now = Date.now();
-			var delta = now - lastFrameTime;
-			if (!supportsAnimationFrame || delta > confetti.frameInterval) {
-				context.clearRect(0, 0, window.innerWidth, window.innerHeight);
-				updateParticles();
-				drawParticles(context);
-				lastFrameTime = now - (delta % confetti.frameInterval);
-			}
-			animationTimer = requestAnimationFrame(runAnimation);
-		}
-	}
-
-	function startConfetti(timeout, min, max) {
-		var width = window.innerWidth;
-		var height = window.innerHeight;
-		window.requestAnimationFrame = (function() {
-			return window.requestAnimationFrame ||
-				window.webkitRequestAnimationFrame ||
-				window.mozRequestAnimationFrame ||
-				window.oRequestAnimationFrame ||
-				window.msRequestAnimationFrame ||
-				function (callback) {
-					return window.setTimeout(callback, confetti.frameInterval);
-				};
-		})();
-		var canvas = document.getElementById("confetti-canvas");
-		if (canvas === null) {
-			canvas = document.createElement("canvas");
-			canvas.setAttribute("id", "confetti-canvas");
-			canvas.setAttribute("style", "display:block;z-index:999999;pointer-events:none;position:fixed;top:0");
-			document.body.prepend(canvas);
-			canvas.width = width;
-			canvas.height = height;
-			window.addEventListener("resize", function() {
-				canvas.width = window.innerWidth;
-				canvas.height = window.innerHeight;
-			}, true);
-			context = canvas.getContext("2d");
-		} else if (context === null)
-			context = canvas.getContext("2d");
-		var count = confetti.maxCount;
-		if (min) {
-			if (max) {
-				if (min == max)
-					count = particles.length + max;
-				else {
-					if (min > max) {
-						var temp = min;
-						min = max;
-						max = temp;
-					}
-					count = particles.length + ((Math.random() * (max - min) + min) | 0);
-				}
-			} else
-				count = particles.length + min;
-		} else if (max)
-			count = particles.length + max;
-		while (particles.length < count)
-			particles.push(resetParticle({}, width, height));
-		streamingConfetti = true;
-		pause = false;
-		runAnimation();
-		if (timeout) {
-			window.setTimeout(stopConfetti, timeout);
-		}
-	}
-
-	function stopConfetti() {
-		streamingConfetti = false;
-	}
-
-	function removeConfetti() {
-		stop();
-		pause = false;
-		particles = [];
-	}
-
-	function toggleConfetti() {
-		if (streamingConfetti)
-			stopConfetti();
-		else
-			startConfetti();
-	}
-
-	function isConfettiRunning() {
-		return streamingConfetti;
-	}
-
-	function drawParticles(context) {
-		var particle;
-		var x, y, x2, y2;
-		for (var i = 0; i < particles.length; i++) {
-			particle = particles[i];
-			context.beginPath();
-			context.lineWidth = particle.diameter;
-			x2 = particle.x + particle.tilt;
-			x = x2 + particle.diameter / 2;
-			y2 = particle.y + particle.tilt + particle.diameter / 2;
-			if (confetti.gradient) {
-				var gradient = context.createLinearGradient(x, particle.y, x2, y2);
-				gradient.addColorStop("0", particle.color);
-				gradient.addColorStop("1.0", particle.color2);
-				context.strokeStyle = gradient;
-			} else
-				context.strokeStyle = particle.color;
-			context.moveTo(x, particle.y);
-			context.lineTo(x2, y2);
-			context.stroke();
-		}
-	}
-
-	function updateParticles() {
-		var width = window.innerWidth;
-		var height = window.innerHeight;
-		var particle;
-		waveAngle += 0.01;
-		for (var i = 0; i < particles.length; i++) {
-			particle = particles[i];
-			if (!streamingConfetti && particle.y < -15)
-				particle.y = height + 100;
-			else {
-				particle.tiltAngle += particle.tiltAngleIncrement;
-				particle.x += Math.sin(waveAngle) - 0.5;
-				particle.y += (Math.cos(waveAngle) + particle.diameter + confetti.speed) * 0.5;
-				particle.tilt = Math.sin(particle.tiltAngle) * 15;
-			}
-			if (particle.x > width + 20 || particle.x < -20 || particle.y > height) {
-				if (streamingConfetti && particles.length <= confetti.maxCount)
-					resetParticle(particle, width, height);
-				else {
-					particles.splice(i, 1);
-					i--;
-				}
-			}
-		}
-	}
-
-(function() {
-	var bConfettiStarted = false;
-	 startConfetti();
-	 bConfettiStarted = true;
-	 setTimeout(function(r){
-	   stopConfetti();
-	 }, 10000);
-})();
-
-                </script>';
+            if ( ! static::isOutputForCli()) {
+                echo('<script>' . "\n" . static::getModuleFileContents('client/js/confetti.js') . '</script>');
             }
         }
 
-        public static function echoArrayAsTable($aData, $bShowHeaders = true, $sLayOut = 'horizontal')
+        /**
+         * Outputs the table of getArrayAsTable(), or of getArrayAsTextTable() on the command line.
+         *
+         * @see getArrayAsTable()
+         */
+        public static function echoArrayAsTable(iterable $mTableData, bool $bShowHeaders = true, string $sLayout = self::TABLE_LAYOUT_HORIZONTAL): void
         {
-            echo(static::getArrayAsTable($aData, $bShowHeaders, $sLayOut));
-        }
-
-        public static function getArrayAsTable($aTableData, $bShowHeaders = true, $sLayOut = 'horizontal')
-        {
-            if ($sLayOut === 'stacked') {
-                return static::getArrayAsStackedTable($aTableData, $bShowHeaders);
+            if (static::isOutputForCli()) {
+                echo(static::getArrayAsTextTable($mTableData, $bShowHeaders, $sLayout));
+                return;
             }
 
-            return static::getArrayAsTableHorizontal($aTableData, $bShowHeaders);
+            echo(static::getArrayAsTable($mTableData, $bShowHeaders, $sLayout));
         }
 
-        protected static function getArrayAsTableHorizontal($aTableData, $bShowHeaders = true)
+        /**
+         * Returns a table for a list of rows as plain text for the command line, with the same input as
+         * getArrayAsTable(). The horizontal layout aligns the columns, the stacked layout shows "label: value" lines.
+         *
+         * @see getArrayAsTable()
+         */
+        public static function getArrayAsTextTable(iterable $mTableData, bool $bShowHeaders = true, string $sLayout = self::TABLE_LAYOUT_HORIZONTAL): string
         {
-            $aHTML   = [];
-            $aHTML[] = '<table>';
+            $aRows = [];
+            foreach ($mTableData as $mRowData) {
+                $aRows[] = $mRowData;
+            }
 
-            $iRowNr = 1;
-            foreach ($aTableData as $aRowData) {
+            if ($sLayout === static::TABLE_LAYOUT_STACKED) {
+                return static::getRowsAsStackedText($aRows, $bShowHeaders);
+            }
 
-                $sRowClass = '';
-                if (is_array($aRowData) && isset($aRowData['css_class'])) {
-                    $sRowClass = $aRowData['css_class'];
+            return static::getRowsAsHorizontalText($aRows, $bShowHeaders);
+        }
+
+        /**
+         * Returns an HTML table for a list of rows.
+         *
+         * @param iterable $mTableData   List of rows. A row is an associative array of column labels to values, or a
+         *                               single value. The key TABLE_ROW_CSS_CLASS_KEY ('css_class') of a row is not
+         *                               shown, but sets a CSS class on the row, e.g. 'section--correct', 'section--error'.
+         * @param bool     $bShowHeaders Whether to show the column labels (taken from the keys of the first row)
+         * @param string   $sLayout      TABLE_LAYOUT_HORIZONTAL for one row per item, TABLE_LAYOUT_STACKED for one
+         *                               label/value pair per row
+         */
+        public static function getArrayAsTable(iterable $mTableData, bool $bShowHeaders = true, string $sLayout = self::TABLE_LAYOUT_HORIZONTAL): string
+        {
+            if ($sLayout === static::TABLE_LAYOUT_STACKED) {
+                return static::getArrayAsStackedTable($mTableData, $bShowHeaders);
+            }
+
+            return static::getArrayAsTableHorizontal($mTableData, $bShowHeaders);
+        }
+
+        /**
+         * Whether a value from the request is filled in: a string that is not empty or only whitespace.
+         * '0' counts as filled in.
+         */
+        protected static function isValueFilledIn(mixed $mValue): bool
+        {
+            return is_string($mValue) && trim($mValue) !== '';
+        }
+
+        /**
+         * Whether a required field name refers to a request key: either the key itself ('New_FirstName') or its label
+         * as shown in the form ('New FirstName').
+         */
+        protected static function isFieldNameForGetKey(string $sFieldName, string $sGetKey): bool
+        {
+            return $sFieldName === $sGetKey || $sFieldName === str_replace('_', ' ', $sGetKey);
+        }
+
+        /**
+         * Returns a value as readable HTML for a table cell. Strings are used as they are (they can contain markup),
+         * booleans become Yes/No badges, null becomes an empty cell and arrays are shown as escaped JSON. Objects are cast to
+         * a string when they can be, otherwise their class name is shown.
+         */
+        protected static function getValueForTableCell(mixed $mValue): string
+        {
+            return match (true) {
+                is_string($mValue)                   => $mValue,
+                $mValue === null                     => '',
+                is_bool($mValue)                     => $mValue
+                    ? '<span class="taskforms-badge taskforms-badge--yes">' . Convert::raw2xml(_t(__CLASS__ . '.YES', 'Yes')) . '</span>'
+                    : '<span class="taskforms-badge taskforms-badge--no">' . Convert::raw2xml(_t(__CLASS__ . '.NO', 'No')) . '</span>',
+                is_int($mValue), is_float($mValue)   => (string)$mValue,
+                $mValue instanceof Stringable        => (string)$mValue,
+                is_array($mValue)                    => Convert::raw2xml(json_encode($mValue, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)),
+                is_object($mValue)                   => Convert::raw2xml(get_class($mValue)),
+                default                              => '',
+            };
+        }
+
+        /**
+         * Returns the value for a request key: from the task's input when the key is one of its options and has a
+         * value, otherwise from the request ($_GET). Null when there is no value.
+         */
+        protected static function getRequestValue(string $sKey): mixed
+        {
+            if (static::isFieldAnInputOption($sKey)) {
+                $mValue = static::$oInput->getOption($sKey);
+
+                if ($mValue !== null) {
+                    return $mValue;
+                }
+            }
+
+            return $_GET[$sKey] ?? null;
+        }
+
+        /**
+         * Whether a request key is an option of the task's input, so it can be passed on the command line.
+         */
+        protected static function isFieldAnInputOption(string $sKey): bool
+        {
+            return static::$oInput?->hasOption($sKey) === true;
+        }
+
+        /**
+         * Whether the output goes to the command line (sake) instead of the browser. The helpers then output plain
+         * text instead of HTML. With setInput(), the type of input decides (Silverstripe passes an HttpRequestInput
+         * when a task runs in the browser); without it, whether PHP runs on the command line.
+         */
+        protected static function isOutputForCli(): bool
+        {
+            if (static::$oInput !== null) {
+                return ! (static::$oInput instanceof HttpRequestInput);
+            }
+
+            return Director::is_cli();
+        }
+
+        /**
+         * Returns HTML as plain text for the command line: without tags and with decoded entities.
+         */
+        protected static function getHtmlAsText(string $sHtml): string
+        {
+            return html_entity_decode(strip_tags($sHtml), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        }
+
+        /**
+         * Returns the label of a form field: the title of its custom FormField when it has one, otherwise the request
+         * key with underscores replaced by spaces.
+         */
+        protected static function getFieldLabel(string $sGetKey, mixed $mComponent): string
+        {
+            if (is_object($mComponent) && method_exists($mComponent, 'Title')) {
+                $sTitle = trim((string)$mComponent->Title());
+
+                if ($sTitle !== '') {
+                    return $sTitle;
+                }
+            }
+
+            return str_replace('_', ' ', $sGetKey);
+        }
+
+        /**
+         * Whether the required fields are given as a map of request keys to references (['Name' => &$sName]) instead of
+         * a list of request keys or labels (['Name']).
+         */
+        protected static function isRequiredFieldsAMap(array $aRequiredFieldsNamesAndVars): bool
+        {
+            return count(array_filter(array_keys($aRequiredFieldsNamesAndVars), 'is_string')) > 0;
+        }
+
+        /**
+         * Whether the form needs the checkbox that confirms the action: the action needs to be previewed, all required
+         * fields are filled in and the action is not confirmed yet. Hydrates the task's variables from the request.
+         */
+        protected static function isExecuteFieldNeeded(array $aGetKeyToVarMap, array $aRequiredFieldsNamesAndVars, bool $bDoesActionNeedToBePreviewed): bool
+        {
+            return $bDoesActionNeedToBePreviewed
+                && ! static::isFirstLoadOrLoadWithoutAllRequiredFields($aGetKeyToVarMap, $aRequiredFieldsNamesAndVars)
+                && ! static::doesRequestContainExecuteConfirmation();
+        }
+
+        /**
+         * Whether a request key is one of the required fields.
+         *
+         * @param array $aRequiredFieldsNamesAndVars List of required request keys or labels, or a map of request keys
+         *                                           to references
+         */
+        protected static function isFieldRequired(string $sGetKey, array $aRequiredFieldsNamesAndVars): bool
+        {
+            if (static::isRequiredFieldsAMap($aRequiredFieldsNamesAndVars)) {
+                return array_key_exists($sGetKey, $aRequiredFieldsNamesAndVars);
+            }
+
+            foreach ($aRequiredFieldsNamesAndVars as $sFieldName) {
+                if (static::isFieldNameForGetKey($sFieldName, $sGetKey)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /**
+         * Returns rows as a text table with aligned columns. The column labels come from the keys of the first row.
+         *
+         * @param array $aRows List of rows, each an associative array of column labels to values or a single value
+         */
+        protected static function getRowsAsHorizontalText(array $aRows, bool $bShowHeaders): string
+        {
+            // rows that are a single value have no column labels
+            $bShowHeaders = $bShowHeaders && count($aRows) > 0 && is_array($aRows[0]);
+            $aRows        = array_map(fn(mixed $mRowData): array => is_array($mRowData) ? $mRowData : [$mRowData], $aRows);
+            $aTextRows    = [];
+
+            if ($bShowHeaders) {
+                $aTextRows[] = array_map('strval', array_keys(static::getRowWithoutCssClass($aRows[0])));
+            }
+
+            foreach ($aRows as $aRow) {
+                $aTextRows[] = array_map(
+                    fn(mixed $mValue): string => static::getHtmlAsText(static::getValueForTableCell($mValue)),
+                    array_values(static::getRowWithoutCssClass($aRow))
+                );
+            }
+
+            $aColumnWidths = [];
+            foreach ($aTextRows as $aTextRow) {
+                foreach ($aTextRow as $iColumnNr => $sText) {
+                    $aColumnWidths[$iColumnNr] = max($aColumnWidths[$iColumnNr] ?? 0, mb_strlen($sText));
+                }
+            }
+
+            $aLines = [];
+            foreach ($aTextRows as $iRowNr => $aTextRow) {
+                $aCells = [];
+                foreach ($aTextRow as $iColumnNr => $sText) {
+                    $aCells[] = $sText . str_repeat(' ', $aColumnWidths[$iColumnNr] - mb_strlen($sText));
+                }
+
+                $aLines[] = rtrim(implode(' | ', $aCells));
+
+                if ($iRowNr === 0 && $bShowHeaders) {
+                    $aLines[] = implode('-+-', array_map(fn(int $iWidth): string => str_repeat('-', $iWidth), $aColumnWidths));
+                }
+            }
+
+            return implode("\n", $aLines) . "\n";
+        }
+
+        /**
+         * Returns rows as "label: value" lines, with an empty line between rows.
+         *
+         * @param array $aRows List of rows, each an associative array of labels to values or a single value
+         */
+        protected static function getRowsAsStackedText(array $aRows, bool $bShowHeaders): string
+        {
+            $aBlocks = [];
+
+            foreach ($aRows as $mRowData) {
+                if ( ! is_array($mRowData)) {
+                    $aBlocks[] = static::getHtmlAsText(static::getValueForTableCell($mRowData));
+                    continue;
+                }
+
+                $aRow   = $mRowData;
+                $aLines = [];
+                foreach (static::getRowWithoutCssClass($aRow) as $mFieldLabel => $mFieldContent) {
+                    $sText    = static::getHtmlAsText(static::getValueForTableCell($mFieldContent));
+                    $aLines[] = $bShowHeaders ? $mFieldLabel . ': ' . $sText : $sText;
+                }
+
+                $aBlocks[] = implode("\n", $aLines);
+            }
+
+            return implode("\n\n", $aBlocks) . "\n";
+        }
+
+        /**
+         * Returns a table row without its TABLE_ROW_CSS_CLASS_KEY, which is not a column.
+         */
+        protected static function getRowWithoutCssClass(array $aRow): array
+        {
+            unset($aRow[static::TABLE_ROW_CSS_CLASS_KEY]);
+
+            return $aRow;
+        }
+
+        /**
+         * Returns the contents of a file in this module, e.g. 'client/css/taskforms.css'.
+         */
+        protected static function getModuleFileContents(string $sRelativePath): string
+        {
+            return (string)file_get_contents(dirname(__DIR__, 2) . '/' . $sRelativePath);
+        }
+
+        /**
+         * Returns the <tr> tag for a table row, with the CSS class from the row's TABLE_ROW_CSS_CLASS_KEY if it has one.
+         */
+        protected static function getTableRowOpeningTag(mixed $mRowData): string
+        {
+            if (is_array($mRowData) && isset($mRowData[static::TABLE_ROW_CSS_CLASS_KEY])) {
+                return '<tr class="' . Convert::raw2att($mRowData[static::TABLE_ROW_CSS_CLASS_KEY]) . '">';
+            }
+
+            return '<tr>';
+        }
+
+        /**
+         * Returns a value as a string for output. Values that are not strings are shown with print_r().
+         */
+        protected static function getAsString(mixed $mMessage): string
+        {
+            if (is_string($mMessage)) {
+                return $mMessage;
+            }
+
+            return '<pre>' . print_r($mMessage, true) . '</pre>';
+        }
+
+        /**
+         * Returns a table with one row per item.
+         *
+         * @see getArrayAsTable()
+         */
+        protected static function getArrayAsTableHorizontal(iterable $mTableData, bool $bShowHeaders = true): string
+        {
+            $aHtml   = [];
+            $aHtml[] = '<div class="taskforms-table"><table>';
+
+            $iRowNr       = 1;
+            $iColumnCount = 1;
+            foreach ($mTableData as $mRowData) {
+                if ($iColumnCount === 1 && is_array($mRowData)) {
+                    $iColumnCount = max(1, count(static::getRowWithoutCssClass($mRowData)));
                 }
 
                 // header
                 if ($iRowNr === 1 && $bShowHeaders === true) {
-                    $aHTML[] = '<tr>';
+                    $aHtml[] = '<tr>';
 
-                    if (is_array($aRowData)) {
-                        foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                            if ( ! in_array($sFieldLabel, ['css_class'])) {
-                                $aHTML[] = '<th>' . $sFieldLabel . '</th>';
+                    if (is_array($mRowData)) {
+                        foreach ($mRowData as $sFieldLabel => $mFieldContent) {
+                            if ($sFieldLabel !== static::TABLE_ROW_CSS_CLASS_KEY) {
+                                $aHtml[] = '<th>' . $sFieldLabel . '</th>';
                             }
                         }
                     }
                     else {
-                        if ( ! is_string($aRowData)) {
-                            try {
-                                $aRowData = serialize($aRowData);
-                            }
-                            catch (Exception $e) {
-                                $aRowData = '';
-                            }
-                        }
-
-                        $aHTML[] = '<th>' . $aRowData . '</th>';
+                        $aHtml[] = '<th>' . static::getValueForTableCell($mRowData) . '</th>';
                     }
 
-                    $aHTML[] = '</tr>';
+                    $aHtml[] = '</tr>';
                 }
 
-                // normale regel
-                $aHTML[] = '<tr>';
+                // regular row
+                $aHtml[] = static::getTableRowOpeningTag($mRowData);
 
-                if (is_array($aRowData)) {
-                    foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                        if ( ! in_array($sFieldLabel, ['css_class'])) {
-                            if ( ! is_string($sFieldContent)) {
-                                try {
-                                    $sFieldContent = serialize($sFieldContent);
-                                }
-                                catch (Exception $e) {
-                                    $sFieldContent = '';
-                                }
-                            }
-
-                            $aHTML[] = '<td>' . $sFieldContent . '</td>';
+                if (is_array($mRowData)) {
+                    foreach ($mRowData as $sFieldLabel => $mFieldContent) {
+                        if ($sFieldLabel !== static::TABLE_ROW_CSS_CLASS_KEY) {
+                            $aHtml[] = '<td>' . static::getValueForTableCell($mFieldContent) . '</td>';
                         }
                     }
                 }
                 else {
-                    if ( ! is_string($aRowData)) {
-                        try {
-                            $aRowData = serialize($aRowData);
-                        }
-                        catch (Exception $e) {
-                            $aRowData = '';
-                        }
-                    }
-
-                    $aHTML[] = '<td>' . $aRowData . '</td>';
+                    // a single value spans all columns
+                    $aHtml[] = '<td' . ($iColumnCount > 1 ? ' colspan="' . $iColumnCount . '"' : '') . '>' . static::getValueForTableCell($mRowData) . '</td>';
                 }
 
-                $aHTML[] = '</tr>';
+                $aHtml[] = '</tr>';
 
                 ++$iRowNr;
             }
 
-            $aHTML[] = '</table>';
+            $aHtml[] = '</table></div>';
 
-            return implode('', $aHTML);
+            return implode('', $aHtml);
         }
 
-        protected static function getArrayAsStackedTable($aTableData, $bShowHeaders = true)
+        /**
+         * Returns a table with one label/value pair per row and an empty row between items.
+         *
+         * @see getArrayAsTable()
+         */
+        protected static function getArrayAsStackedTable(iterable $mTableData, bool $bShowHeaders = true): string
         {
-            $aHTML   = [];
-            $aHTML[] = '<table>';
+            $aHtml   = [];
+            $aHtml[] = '<div class="taskforms-table taskforms-table--stacked"><table>';
 
-            $iRowNr = 1;
-            foreach ($aTableData as $aRowData) {
+            foreach ($mTableData as $mRowData) {
 
-                if (is_array($aRowData)) {
-                    foreach ($aRowData as $sFieldLabel => $sFieldContent) {
-                        if ($bShowHeaders) {
-                            $aHTML[] = '<tr>';
-                            $aHTML[] = '  <th style="text-align: left" ">' . $sFieldLabel . ':</th>';
-                            $aHTML[] = '</tr>';
+                if (is_array($mRowData)) {
+                    $sRowOpeningTag = static::getTableRowOpeningTag($mRowData);
+
+                    foreach ($mRowData as $sFieldLabel => $mFieldContent) {
+                        if ($sFieldLabel === static::TABLE_ROW_CSS_CLASS_KEY) {
+                            continue;
                         }
 
-                        $aHTML[] = '<tr>';
-                        $aHTML[] = '  <td>' . $sFieldContent . '</td>';
-                        $aHTML[] = '</tr>';
+                        if ($bShowHeaders) {
+                            $aHtml[] = $sRowOpeningTag;
+                            $aHtml[] = '  <th style="text-align: left">' . $sFieldLabel . ':</th>';
+                            $aHtml[] = '</tr>';
+                        }
+
+                        $aHtml[] = $sRowOpeningTag;
+                        $aHtml[] = '  <td>' . static::getValueForTableCell($mFieldContent) . '</td>';
+                        $aHtml[] = '</tr>';
                     }
                 }
                 else {
-                    $aHTML[] = '<tr>';
-                    $aHTML[] = '  <td>' . $aRowData . '</td>';
-                    $aHTML[] = '</tr>';
+                    $aHtml[] = '<tr>';
+                    $aHtml[] = '  <td>' . static::getValueForTableCell($mRowData) . '</td>';
+                    $aHtml[] = '</tr>';
                 }
 
-                $aHTML[] = '<tr class="taskform-arraytable__separator-row">';
-                $aHTML[] = '  <td class="taskform-arraytable__separator-cell">&nbsp;</td>';
-                $aHTML[] = '</tr>';
-
-                ++$iRowNr;
+                $aHtml[] = '<tr class="taskform-arraytable__separator-row">';
+                $aHtml[] = '  <td class="taskform-arraytable__separator-cell">&nbsp;</td>';
+                $aHtml[] = '</tr>';
             }
 
-            $aHTML[] = '</table>';
+            $aHtml[] = '</table></div>';
 
-            return implode('', $aHTML);
+            return implode('', $aHtml);
         }
     }
